@@ -1,4 +1,4 @@
-import { type FormEvent, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   Apple,
@@ -34,6 +34,13 @@ type AuthMode = 'login' | 'register'
 type LoadLevel = 'leve' | 'moderado' | 'pesado' | 'muito pesado'
 
 type AppUser = {
+  id: number
+  name: string
+  email: string
+  role: Area
+}
+
+type RegisterUserInput = {
   name: string
   email: string
   password: string
@@ -104,12 +111,6 @@ const initialStudents: Student[] = [
     adherence: 76,
     nextReview: '2026-09-20',
   },
-]
-
-const initialUsers: AppUser[] = [
-  { name: 'Administrador', email: 'admin@appfit.local', password: '123456', role: 'admin' },
-  { name: 'Personal JC', email: 'personal@appfit.local', password: '123456', role: 'personal' },
-  { name: 'Aline Costa', email: 'aluno@appfit.local', password: '123456', role: 'aluno' },
 ]
 
 const initialExercises: Exercise[] = [
@@ -214,7 +215,9 @@ const blankAssessment: Assessment = {
 }
 
 function App() {
-  const [users, setUsers] = useState(initialUsers)
+  const [isAuthLoading, setIsAuthLoading] = useState(() =>
+    Boolean(localStorage.getItem('app-fit-user-id')),
+  )
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null)
   const [area, setArea] = useState<Area>('personal')
   const [students, setStudents] = useState(initialStudents)
@@ -234,37 +237,65 @@ function App() {
     students.reduce((total, student) => total + student.adherence, 0) / students.length,
   )
 
-  function login(email: string, password: string) {
-    const foundUser = users.find(
-      (user) =>
-        user.email.toLowerCase() === email.trim().toLowerCase() &&
-        user.password === password,
-    )
+  useEffect(() => {
+    const savedUserId = localStorage.getItem('app-fit-user-id')
 
-    if (!foundUser) return false
+    if (!savedUserId) return
 
-    setCurrentUser(foundUser)
-    setArea(foundUser.role)
-    return true
-  }
+    fetch('/api/auth/me', {
+      headers: {
+        'x-user-id': savedUserId,
+      },
+    })
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.message ?? 'Sessao invalida.')
+        return data.user as AppUser
+      })
+      .then((user) => {
+        setCurrentUser(user)
+        setArea(user.role)
+      })
+      .catch(() => localStorage.removeItem('app-fit-user-id'))
+      .finally(() => setIsAuthLoading(false))
+  }, [])
 
-  function register(user: AppUser) {
-    const emailAlreadyExists = users.some(
-      (current) => current.email.toLowerCase() === user.email.trim().toLowerCase(),
-    )
+  async function login(email: string, password: string) {
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+    const data = await response.json()
 
-    if (emailAlreadyExists) return false
-
-    const newUser = {
-      ...user,
-      email: user.email.trim().toLowerCase(),
-      name: user.name.trim(),
+    if (!response.ok) {
+      return data.message ?? 'E-mail ou senha invalidos.'
     }
 
-    setUsers((current) => [...current, newUser])
+    const user = data.user as AppUser
+    localStorage.setItem('app-fit-user-id', String(user.id))
+    setCurrentUser(user)
+    setArea(user.role)
+    return ''
+  }
+
+  async function register(user: RegisterUserInput) {
+    const response = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(user),
+    })
+    const data = await response.json()
+
+    if (!response.ok) {
+      return data.message ?? 'Nao foi possivel criar a conta.'
+    }
+
+    const newUser = data.user as AppUser
+    localStorage.setItem('app-fit-user-id', String(newUser.id))
     setCurrentUser(newUser)
     setArea(newUser.role)
-    return true
+    return ''
   }
 
   function addStudent() {
@@ -286,6 +317,27 @@ function App() {
     if (!exerciseForm.name.trim() || !exerciseForm.muscle.trim()) return
     setExerciseCatalog((current) => [...current, exerciseForm])
     setExerciseForm(blankExercise)
+  }
+
+  function logout() {
+    localStorage.removeItem('app-fit-user-id')
+    setCurrentUser(null)
+  }
+
+  if (isAuthLoading) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel loading-panel">
+          <div className="brand-mark">
+            <span className="brand-number">JC</span>
+            <span>
+              <strong>Assessoria Fitness</strong>
+              <small>Carregando sessao</small>
+            </span>
+          </div>
+        </section>
+      </main>
+    )
   }
 
   if (!currentUser) {
@@ -351,7 +403,7 @@ function App() {
           <ShieldCheck size={22} aria-hidden="true" />
           <strong>{currentUser.name}</strong>
           <span>{currentUser.email}</span>
-          <button className="logout-button" onClick={() => setCurrentUser(null)} type="button">
+          <button className="logout-button" onClick={logout} type="button">
             <LogOut size={16} />
             Sair
           </button>
@@ -507,27 +559,30 @@ function AuthScreen({
   onLogin,
   onRegister,
 }: {
-  onLogin: (email: string, password: string) => boolean
-  onRegister: (user: AppUser) => boolean
+  onLogin: (email: string, password: string) => Promise<string>
+  onRegister: (user: RegisterUserInput) => Promise<string>
 }) {
   const [mode, setMode] = useState<AuthMode>('login')
   const [loginEmail, setLoginEmail] = useState('personal@appfit.local')
   const [loginPassword, setLoginPassword] = useState('123456')
-  const [registerForm, setRegisterForm] = useState<AppUser>({
+  const [registerForm, setRegisterForm] = useState<RegisterUserInput>({
     name: '',
     email: '',
     password: '',
     role: 'aluno',
   })
   const [message, setMessage] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  function submitLogin(event: FormEvent<HTMLFormElement>) {
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const success = onLogin(loginEmail, loginPassword)
-    setMessage(success ? '' : 'E-mail ou senha invalidos.')
+    setIsSubmitting(true)
+    const errorMessage = await onLogin(loginEmail, loginPassword)
+    setMessage(errorMessage)
+    setIsSubmitting(false)
   }
 
-  function submitRegister(event: FormEvent<HTMLFormElement>) {
+  async function submitRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     if (!registerForm.name.trim() || !registerForm.email.trim() || registerForm.password.length < 6) {
@@ -535,8 +590,10 @@ function AuthScreen({
       return
     }
 
-    const success = onRegister(registerForm)
-    setMessage(success ? '' : 'Este e-mail ja esta cadastrado.')
+    setIsSubmitting(true)
+    const errorMessage = await onRegister(registerForm)
+    setMessage(errorMessage)
+    setIsSubmitting(false)
   }
 
   return (
@@ -553,8 +610,8 @@ function AuthScreen({
           <p className="eyebrow">Acesso local</p>
           <h1>Entre no painel ou cadastre um novo usuario.</h1>
           <p>
-            A tela ja separa perfis de admin, personal e aluno. Nesta fase os dados ficam na
-            sessao do app; a proxima etapa conecta com o SQLite local.
+            A tela ja separa perfis de admin, personal e aluno. Login e cadastro agora usam a
+            API local com SQLite.
           </p>
         </div>
         <div className="demo-users" aria-label="Usuarios de demonstracao">
@@ -606,9 +663,9 @@ function AuthScreen({
               </div>
             </label>
             {message ? <p className="form-message">{message}</p> : null}
-            <button className="primary-button" type="submit">
+            <button className="primary-button" disabled={isSubmitting} type="submit">
               <LogIn size={18} />
-              Entrar
+              {isSubmitting ? 'Entrando...' : 'Entrar'}
             </button>
           </form>
         ) : (
@@ -654,9 +711,9 @@ function AuthScreen({
               </select>
             </label>
             {message ? <p className="form-message">{message}</p> : null}
-            <button className="primary-button" type="submit">
+            <button className="primary-button" disabled={isSubmitting} type="submit">
               <UserPlus size={18} />
-              Criar conta
+              {isSubmitting ? 'Criando...' : 'Criar conta'}
             </button>
           </form>
         )}

@@ -5,11 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "node server/index.js",
+    "start": "node server/index.js",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1",
     "lucide-react": "^1.41.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

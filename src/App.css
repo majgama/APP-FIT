@@ -51,6 +51,11 @@
   padding: 22px;
 }
 
+.loading-panel {
+  width: min(100%, 440px);
+  justify-self: center;
+}
+
 .auth-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -375,6 +380,14 @@ textarea {
 .student-row:hover,
 .admin-action:hover {
   transform: translateY(-1px);
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.icon-button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+  transform: none;
 }
 
 .primary-button {
