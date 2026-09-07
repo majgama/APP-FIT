@@ -18,6 +18,23 @@ db.pragma('foreign_keys = ON')
 const schema = readFileSync(schemaPath, 'utf8')
 db.exec(schema)
 
+const existingInvitationColumns = db.prepare('PRAGMA table_info(invitations)').all().map((column) => column.name)
+const invitationMigrations = [
+  ['trainer_id', 'ALTER TABLE invitations ADD COLUMN trainer_id INTEGER'],
+  ['accepted_student_id', 'ALTER TABLE invitations ADD COLUMN accepted_student_id INTEGER'],
+  ['invite_code', 'ALTER TABLE invitations ADD COLUMN invite_code TEXT'],
+]
+
+for (const [column, statement] of invitationMigrations) {
+  if (!existingInvitationColumns.includes(column)) db.exec(statement)
+}
+
+const existingStudentTrainerColumns = db.prepare('PRAGMA table_info(student_trainers)').all().map((column) => column.name)
+
+if (!existingStudentTrainerColumns.includes('inactive_reason')) {
+  db.exec('ALTER TABLE student_trainers ADD COLUMN inactive_reason TEXT')
+}
+
 const demoUsers = [
   { name: 'Administrador', email: 'admin@appfit.local', password: '123456', role: 'admin' },
   { name: 'Personal JC', email: 'personal@appfit.local', password: '123456', role: 'personal' },

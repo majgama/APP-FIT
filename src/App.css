@@ -833,3 +833,68 @@ textarea {
 .student-row.readonly:hover {
   transform: none;
 }
+.student-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mini-icon-button,
+.mini-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  color: #06101c;
+  background: #f4c86a;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.mini-icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.mini-action {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.student-row.inactive {
+  opacity: 0.86;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.invite-box {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid rgba(244, 200, 106, 0.26);
+  border-radius: 8px;
+  background: rgba(244, 200, 106, 0.1);
+}
+
+.invite-box span {
+  color: #f4c86a;
+  font-weight: 800;
+}
+
+.invite-box strong {
+  overflow-wrap: anywhere;
+  color: #f7f8fc;
+  font-size: 0.9rem;
+}
+
+.empty-state,
+.invite-hint {
+  color: #aab6cb;
+}
+
+.invite-hint {
+  display: block;
+  margin-top: 6px;
+}

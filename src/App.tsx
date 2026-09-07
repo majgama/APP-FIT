@@ -11,6 +11,7 @@ import {
   Dumbbell,
   FilePlus2,
   HeartPulse,
+  Link2,
   KeyRound,
   LineChart,
   LogIn,
@@ -20,10 +21,12 @@ import {
   MessageCircle,
   Play,
   Plus,
+  Power,
   ShieldCheck,
   UserPlus,
   UserCog,
   Users,
+  Copy,
   Video,
   Volume2,
 } from 'lucide-react'
@@ -38,6 +41,7 @@ type AppUser = {
   name: string
   email: string
   role: Area
+  invitationToken?: string
 }
 
 type RegisterUserInput = {
@@ -56,6 +60,8 @@ type Student = {
   adherence: number
   nextReview: string
   trainers?: string
+  linkStatus?: 'active' | 'inactive'
+  inactiveReason?: string
 }
 
 type Exercise = {
@@ -77,6 +83,20 @@ type Trainer = {
   name: string
   email: string
   specialty: string
+}
+
+type StudentInvitation = {
+  code: string
+  email: string
+  trainerName: string
+  expiresAt: string
+}
+
+type GeneratedInvite = {
+  code: string
+  token: string
+  url: string
+  expiresAt: string
 }
 type Meal = {
   name: string
@@ -231,6 +251,7 @@ function App() {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null)
   const [area, setArea] = useState<Area>('personal')
   const [students, setStudents] = useState(initialStudents)
+  const [inactiveStudents, setInactiveStudents] = useState<Student[]>([])
   const [selectedStudent, setSelectedStudent] = useState(initialStudents[0].name)
   const [studentForm, setStudentForm] = useState(blankStudent)
   const [exerciseForm, setExerciseForm] = useState(blankExercise)
@@ -238,15 +259,17 @@ function App() {
   const [trainers, setTrainers] = useState<Trainer[]>([])
   const [assessment, setAssessment] = useState(blankAssessment)
   const [studentDoubt, setStudentDoubt] = useState('')
+  const [invitationToken, setInvitationToken] = useState('')
+  const [studentInvitation, setStudentInvitation] = useState<StudentInvitation | null>(null)
 
   const activeStudent = useMemo(
-    () => students.find((student) => student.name === selectedStudent) ?? students[0],
+    () => students.find((student) => student.name === selectedStudent) ?? students[0] ?? blankStudent,
     [selectedStudent, students],
   )
 
-  const averageAdherence = Math.round(
-    students.reduce((total, student) => total + student.adherence, 0) / students.length,
-  )
+  const averageAdherence = students.length
+    ? Math.round(students.reduce((total, student) => total + student.adherence, 0) / students.length)
+    : 0
 
 
   async function apiRequest(path: string, options: RequestInit = {}) {
@@ -286,8 +309,17 @@ function App() {
           headers: { Authorization: `Bearer ${token}` },
         })
         const savedStudents = studentData.students as Student[]
-        setStudents(savedStudents.length ? savedStudents : initialStudents)
-        setSelectedStudent(savedStudents[0]?.name ?? initialStudents[0].name)
+        setStudents(savedStudents)
+        setSelectedStudent(savedStudents[0]?.name ?? '')
+
+        if (role === 'personal') {
+          const inactiveData = await apiRequest('/api/students?status=inactive', {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          setInactiveStudents(inactiveData.students as Student[])
+        } else {
+          setInactiveStudents([])
+        }
       }
     } catch (error) {
       console.error(error)
@@ -295,6 +327,20 @@ function App() {
   }
 
   useEffect(() => {
+    const invite = new URLSearchParams(window.location.search).get('invite') ?? ''
+
+    if (invite) {
+      setInvitationToken(invite)
+      fetch(`/api/invitations/student/${invite}`)
+        .then(async (response) => {
+          const data = await response.json()
+          if (!response.ok) throw new Error(data.message ?? 'Convite invalido.')
+          return data.invitation as StudentInvitation
+        })
+        .then(setStudentInvitation)
+        .catch(() => setStudentInvitation(null))
+    }
+
     const savedToken = localStorage.getItem('app-fit-auth-token')
 
     if (!savedToken) return
@@ -342,7 +388,7 @@ function App() {
     const response = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(user),
+      body: JSON.stringify({ ...user, invitationToken }),
     })
     const data = await response.json()
 
@@ -395,6 +441,28 @@ function App() {
   }
 
 
+  async function createStudentInvite() {
+    return apiRequest('/api/invitations/student', { method: 'POST' })
+      .then((data) => data.invitation as GeneratedInvite)
+      .catch((error) => {
+        alert(error.message)
+        return null
+      })
+  }
+
+  async function updateStudentStatus(studentId: number, status: 'active' | 'inactive') {
+    return apiRequest(`/api/students/${studentId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    })
+      .then(() => {
+        const token = localStorage.getItem('app-fit-auth-token')
+        if (token && currentUser) fetchAppData(token, currentUser.role)
+        return ''
+      })
+      .catch((error) => error.message)
+  }
+
   async function linkStudentToTrainer(studentId: number, trainerId: number) {
     if (!currentUser || currentUser.role !== 'admin') return 'Somente admin pode vincular alunos e personais.'
 
@@ -432,7 +500,14 @@ function App() {
   }
 
   if (!currentUser) {
-    return <AuthScreen onLogin={login} onRegister={register} />
+    return (
+      <AuthScreen
+        invitation={studentInvitation}
+        invitationToken={invitationToken}
+        onLogin={login}
+        onRegister={register}
+      />
+    )
   }
 
   return (
@@ -549,8 +624,8 @@ function App() {
         {area === 'personal' ? (
           <>
             <section className="metrics-grid" aria-label="Indicadores principais">
-              <Metric icon={Users} label="Alunos ativos" value={String(students.length)} detail="Lista editavel" />
-              <Metric icon={ClipboardList} label="Planos salvos" value="12" detail="Semana ou dia" />
+              <Metric icon={Users} label="Alunos ativos" value={String(students.length)} detail="Carteira em acompanhamento" />
+              <Metric icon={ClipboardList} label="Inativos" value={String(inactiveStudents.length)} detail="Podem ser reativados" />
               <Metric icon={CheckCircle2} label="Check-ins" value={`${averageAdherence}%`} detail="Media geral" />
             </section>
 
@@ -568,11 +643,28 @@ function App() {
                         <strong>{student.name}</strong>
                         <small>{student.trainers ? student.goal + ' - ' + student.trainers : student.goal}</small>
                       </span>
-                      <b>{student.adherence}%</b>
+                      <span className="student-actions">
+                        <b>{student.adherence}%</b>
+                        {student.id ? (
+                          <button
+                            aria-label="Inativar aluno"
+                            className="mini-icon-button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              updateStudentStatus(student.id!, 'inactive')
+                            }}
+                            type="button"
+                          >
+                            <Power size={15} />
+                          </button>
+                        ) : null}
+                      </span>
                     </button>
                   ))}
                 </div>
               </Panel>
+
+              <InvitePanel onCreateInvite={createStudentInvite} />
 
               <Panel eyebrow="Novo cadastro" title="Cadastrar aluno">
                 <div className="form-grid">
@@ -585,6 +677,27 @@ function App() {
                     <Plus size={18} />
                     Salvar aluno
                   </button>
+                </div>
+              </Panel>
+
+              <Panel eyebrow="Alunos inativos" title="Consultar e reativar">
+                <div className="student-list">
+                  {inactiveStudents.length ? inactiveStudents.map((student) => (
+                    <div className="student-row readonly inactive" key={student.id ?? student.name}>
+                      <span>
+                        <strong>{student.name}</strong>
+                        <small>{student.goal || student.inactiveReason || 'Aluno inativo para este personal'}</small>
+                      </span>
+                      <button
+                        className="mini-action"
+                        onClick={() => student.id ? updateStudentStatus(student.id, 'active') : null}
+                        type="button"
+                      >
+                        <Power size={15} />
+                        Ativar
+                      </button>
+                    </div>
+                  )) : <p className="empty-state">Nenhum aluno inativo.</p>}
                 </div>
               </Panel>
             </section>
@@ -654,9 +767,13 @@ function App() {
 }
 
 function AuthScreen({
+  invitation,
+  invitationToken,
   onLogin,
   onRegister,
 }: {
+  invitation: StudentInvitation | null
+  invitationToken: string
   onLogin: (email: string, password: string) => Promise<string>
   onRegister: (user: RegisterUserInput) => Promise<string>
 }) {
@@ -671,6 +788,17 @@ function AuthScreen({
   })
   const [message, setMessage] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (!invitationToken) return
+
+    setMode('register')
+    setRegisterForm((current) => ({
+      ...current,
+      email: invitation?.email || current.email,
+      role: 'aluno',
+    }))
+  }, [invitation, invitationToken])
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -706,7 +834,7 @@ function AuthScreen({
         </div>
         <div className="auth-copy">
           <p className="eyebrow">Acesso local</p>
-          <h1>Entre no painel ou cadastre um novo usuario.</h1>
+          <h1>{invitation ? `Cadastro vinculado a ${invitation.trainerName}.` : 'Entre no painel ou cadastre um novo usuario.'}</h1>
           <p>
             A tela ja separa perfis de admin, personal e aluno. Login e cadastro agora usam a
             API local com SQLite.
@@ -800,6 +928,7 @@ function AuthScreen({
             <label>
               <span>Tipo de usuario</span>
               <select
+                disabled={Boolean(invitationToken)}
                 onChange={(event) => setRegisterForm({ ...registerForm, role: event.target.value as Area })}
                 value={registerForm.role}
               >
@@ -807,6 +936,7 @@ function AuthScreen({
                 <option value="personal">Personal</option>
                 <option value="admin">Admin</option>
               </select>
+              {invitation ? <small className="invite-hint">Convite {invitation.code} de {invitation.trainerName}</small> : null}
             </label>
             {message ? <p className="form-message">{message}</p> : null}
             <button className="primary-button" disabled={isSubmitting} type="submit">
@@ -817,6 +947,59 @@ function AuthScreen({
         )}
       </section>
     </main>
+  )
+}
+
+function InvitePanel({ onCreateInvite }: { onCreateInvite: () => Promise<GeneratedInvite | null> }) {
+  const [invite, setInvite] = useState<GeneratedInvite | null>(null)
+  const [message, setMessage] = useState('')
+
+  async function createInvite() {
+    const generatedInvite = await onCreateInvite()
+    if (!generatedInvite) return
+
+    setInvite(generatedInvite)
+    setMessage('Link pronto para enviar no WhatsApp.')
+  }
+
+  async function copyInvite() {
+    if (!invite) return
+
+    const text = `Ola! Cadastre-se no APP-FIT pelo meu link: ${invite.url}`
+    await navigator.clipboard.writeText(text)
+    setMessage('Mensagem copiada.')
+  }
+
+  const whatsappUrl = invite
+    ? `https://wa.me/?text=${encodeURIComponent(`Ola! Cadastre-se no APP-FIT pelo meu link: ${invite.url}`)}`
+    : ''
+
+  return (
+    <Panel eyebrow="Convite" title="Enviar link para aluno">
+      <div className="form-grid compact">
+        {invite ? (
+          <div className="invite-box">
+            <span>Codigo {invite.code}</span>
+            <strong>{invite.url}</strong>
+          </div>
+        ) : null}
+        {message ? <p className="form-message neutral-message">{message}</p> : null}
+        <button className="primary-button" onClick={createInvite} type="button">
+          <Link2 size={18} />
+          Gerar link
+        </button>
+        <button className="secondary-button" disabled={!invite} onClick={copyInvite} type="button">
+          <Copy size={18} />
+          Copiar mensagem
+        </button>
+        {invite ? (
+          <a className="secondary-button link-button" href={whatsappUrl} rel="noreferrer" target="_blank">
+            <MessageCircle size={18} />
+            Enviar no WhatsApp
+          </a>
+        ) : null}
+      </div>
+    </Panel>
   )
 }
 

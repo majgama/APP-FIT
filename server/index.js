@@ -12,12 +12,13 @@ function hashToken(token) {
   return createHash('sha256').update(token).digest('hex')
 }
 
+function toSqlDateTime(date) {
+  return date.toISOString().slice(0, 19).replace('T', ' ')
+}
+
 function createSession(userId) {
   const token = randomBytes(32).toString('hex')
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30)
-    .toISOString()
-    .slice(0, 19)
-    .replace('T', ' ')
+  const expiresAt = toSqlDateTime(new Date(Date.now() + 1000 * 60 * 60 * 24 * 30))
 
   db.prepare(
     `
@@ -70,7 +71,6 @@ function requireUser(request, response) {
   return user
 }
 
-
 function getTrainerByUserId(userId) {
   return db.prepare('SELECT id, user_id AS userId FROM trainers WHERE user_id = ?').get(userId)
 }
@@ -94,6 +94,63 @@ function requireRole(request, response, allowedRoles) {
   }
 
   return user
+}
+
+function getBaseUrl(request) {
+  const forwardedProto = String(request.headers['x-forwarded-proto'] ?? '').split(',')[0]
+  const protocol = forwardedProto || request.protocol || 'http'
+  const host = request.headers.host ?? `127.0.0.1:${port}`
+
+  return `${protocol}://${host}`
+}
+
+function getInvitationByToken(token) {
+  return db
+    .prepare(
+      `
+      SELECT
+        invitations.id,
+        invitations.email,
+        invitations.invite_code AS code,
+        invitations.trainer_id AS trainerId,
+        invitations.status,
+        invitations.expires_at AS expiresAt,
+        trainer_users.name AS trainerName
+      FROM invitations
+      JOIN trainers ON trainers.id = invitations.trainer_id
+      JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
+      WHERE invitations.token_hash = ?
+      `,
+    )
+    .get(hashToken(token))
+}
+
+function isInvitationUsable(invitation) {
+  if (!invitation || invitation.status !== 'pending') return false
+  if (!invitation.expiresAt) return true
+
+  return new Date(invitation.expiresAt.replace(' ', 'T')) > new Date()
+}
+
+function createStudentInvite({ request, invitedByUserId, trainerId, email }) {
+  const token = randomBytes(32).toString('hex')
+  const code = randomBytes(4).toString('hex').toUpperCase()
+  const role = db.prepare("SELECT id FROM user_roles WHERE name = 'aluno'").get()
+  const expiresAt = toSqlDateTime(new Date(Date.now() + 1000 * 60 * 60 * 24 * 14))
+
+  db.prepare(
+    `
+    INSERT INTO invitations (invited_by_user_id, trainer_id, email, invite_code, role_id, token_hash, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    `,
+  ).run(invitedByUserId, trainerId, email, code, role.id, hashToken(token), expiresAt)
+
+  return {
+    code,
+    token,
+    url: `${getBaseUrl(request)}/?invite=${token}`,
+    expiresAt,
+  }
 }
 
 app.get('/api/health', (_request, response) => {
@@ -135,14 +192,46 @@ app.post('/api/auth/login', (request, response) => {
   response.json({ user: toPublicUser(user), token: createSession(user.id) })
 })
 
+app.get('/api/invitations/student/:token', (request, response) => {
+  const token = String(request.params.token ?? '')
+  const invitation = getInvitationByToken(token)
+
+  if (!isInvitationUsable(invitation)) {
+    response.status(404).json({ message: 'Convite invalido ou expirado.' })
+    return
+  }
+
+  response.json({
+    invitation: {
+      code: invitation.code,
+      email: invitation.email,
+      trainerName: invitation.trainerName,
+      expiresAt: invitation.expiresAt,
+    },
+  })
+})
+
 app.post('/api/auth/register', (request, response) => {
   const name = String(request.body?.name ?? '').trim()
   const email = String(request.body?.email ?? '').trim().toLowerCase()
   const password = String(request.body?.password ?? '')
-  const role = String(request.body?.role ?? 'aluno').trim().toLowerCase()
+  const invitationToken = String(request.body?.invitationToken ?? '').trim()
+  const invitation = invitationToken ? getInvitationByToken(invitationToken) : null
+  const requestedRole = String(request.body?.role ?? 'aluno').trim().toLowerCase()
+  const role = invitation ? 'aluno' : requestedRole
 
   if (!name || !email || password.length < 6) {
     response.status(400).json({ message: 'Preencha nome, e-mail e senha com pelo menos 6 caracteres.' })
+    return
+  }
+
+  if (invitationToken && !isInvitationUsable(invitation)) {
+    response.status(400).json({ message: 'Convite invalido ou expirado.' })
+    return
+  }
+
+  if (invitation?.email && invitation.email !== email) {
+    response.status(400).json({ message: 'Este convite foi gerado para outro e-mail.' })
     return
   }
 
@@ -160,25 +249,62 @@ app.post('/api/auth/register', (request, response) => {
     return
   }
 
-  const result = db
-    .prepare(
-      `
-      INSERT INTO users (role_id, name, email, password_hash)
-      VALUES (?, ?, ?, ?)
-      `,
-    )
-    .run(roleRecord.id, name, email, bcrypt.hashSync(password, 10))
+  const transaction = db.transaction(() => {
+    const result = db
+      .prepare(
+        `
+        INSERT INTO users (role_id, name, email, password_hash)
+        VALUES (?, ?, ?, ?)
+        `,
+      )
+      .run(roleRecord.id, name, email, bcrypt.hashSync(password, 10))
 
-  const user = {
-    id: result.lastInsertRowid,
-    name,
-    email,
-    role: roleRecord.name,
-  }
+    const user = {
+      id: result.lastInsertRowid,
+      name,
+      email,
+      role: roleRecord.name,
+    }
 
-  if (roleRecord.name === 'personal') {
-    ensureTrainerForUser(user.id)
-  }
+    if (roleRecord.name === 'personal') {
+      ensureTrainerForUser(user.id)
+    }
+
+    if (invitation) {
+      const studentResult = db
+        .prepare(
+          `
+          INSERT INTO students (user_id, trainer_id, name, start_date, status)
+          VALUES (?, ?, ?, date('now'), 'active')
+          `,
+        )
+        .run(user.id, invitation.trainerId, name)
+
+      db.prepare(
+        `
+        INSERT INTO student_trainers (student_id, trainer_id, relationship_type, is_active, inactive_reason, ended_at)
+        VALUES (?, ?, 'primary', 1, NULL, NULL)
+        ON CONFLICT(student_id, trainer_id) DO UPDATE SET
+          is_active = 1,
+          inactive_reason = NULL,
+          ended_at = NULL,
+          updated_at = CURRENT_TIMESTAMP
+        `,
+      ).run(studentResult.lastInsertRowid, invitation.trainerId)
+
+      db.prepare(
+        `
+        UPDATE invitations
+        SET status = 'accepted', accepted_student_id = ?, accepted_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+      ).run(studentResult.lastInsertRowid, invitation.id)
+    }
+
+    return user
+  })
+
+  const user = transaction()
 
   response.status(201).json({ user, token: createSession(user.id) })
 })
@@ -209,36 +335,70 @@ app.get('/api/trainers', (request, response) => {
   response.json({ trainers })
 })
 
+app.post('/api/invitations/student', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const email = String(request.body?.email ?? '').trim().toLowerCase()
+  const requestedTrainerId = Number(request.body?.trainerId)
+  const trainer = user.role === 'personal'
+    ? ensureTrainerForUser(user.id)
+    : db.prepare('SELECT id FROM trainers WHERE id = ?').get(requestedTrainerId)
+
+  if (!trainer) {
+    response.status(400).json({ message: 'Selecione um personal valido para o convite.' })
+    return
+  }
+
+  const invitation = createStudentInvite({
+    request,
+    invitedByUserId: user.id,
+    trainerId: trainer.id,
+    email,
+  })
+
+  response.status(201).json({ invitation })
+})
+
 app.get('/api/students', (request, response) => {
   const user = requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
-  const baseSelect = `
-    SELECT
-      students.id,
-      students.name,
-      COALESCE(students.goal, '') AS goal,
-      COALESCE(students.start_date, '') AS start,
-      COALESCE(students.restrictions, '') AS restrictions,
-      0 AS adherence,
-      'Agendar' AS nextReview,
-      COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers
-    FROM students
-    LEFT JOIN student_trainers ON student_trainers.student_id = students.id
-      AND student_trainers.is_active = 1
-      AND student_trainers.ended_at IS NULL
-    LEFT JOIN trainers ON trainers.id = student_trainers.trainer_id
-    LEFT JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
-  `
+  const status = String(request.query.status ?? 'active')
+
+  if (!['active', 'inactive', 'all'].includes(status)) {
+    response.status(400).json({ message: 'Status invalido.' })
+    return
+  }
 
   if (user.role === 'admin') {
+    const whereClause = status === 'all' ? '' : 'WHERE students.status = ?'
+    const params = status === 'all' ? [] : [status]
     const students = db
       .prepare(
-        `${baseSelect}
+        `
+        SELECT
+          students.id,
+          students.name,
+          COALESCE(students.goal, '') AS goal,
+          COALESCE(students.start_date, '') AS start,
+          COALESCE(students.restrictions, '') AS restrictions,
+          students.status AS linkStatus,
+          0 AS adherence,
+          'Agendar' AS nextReview,
+          COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers
+        FROM students
+        LEFT JOIN student_trainers ON student_trainers.student_id = students.id
+          AND student_trainers.is_active = 1
+          AND student_trainers.ended_at IS NULL
+        LEFT JOIN trainers ON trainers.id = student_trainers.trainer_id
+        LEFT JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
+        ${whereClause}
         GROUP BY students.id
-        ORDER BY students.name`,
+        ORDER BY students.name
+        `,
       )
-      .all()
+      .all(...params)
 
     response.json({ students })
     return
@@ -251,20 +411,36 @@ app.get('/api/students', (request, response) => {
     return
   }
 
+  const statusClause = status === 'all' ? '' : 'AND own_link.is_active = ?'
+  const params = status === 'all' ? [trainer.id] : [trainer.id, status === 'active' ? 1 : 0]
   const students = db
     .prepare(
-      `${baseSelect}
-      WHERE students.id IN (
-        SELECT student_id
-        FROM student_trainers
-        WHERE trainer_id = ?
-          AND is_active = 1
-          AND ended_at IS NULL
-      )
-      GROUP BY students.id
-      ORDER BY students.name`,
+      `
+      SELECT
+        students.id,
+        students.name,
+        COALESCE(students.goal, '') AS goal,
+        COALESCE(students.start_date, '') AS start,
+        COALESCE(students.restrictions, '') AS restrictions,
+        CASE own_link.is_active WHEN 1 THEN 'active' ELSE 'inactive' END AS linkStatus,
+        COALESCE(own_link.inactive_reason, '') AS inactiveReason,
+        0 AS adherence,
+        'Agendar' AS nextReview,
+        COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers
+      FROM students
+      JOIN student_trainers AS own_link ON own_link.student_id = students.id
+        AND own_link.trainer_id = ?
+        ${statusClause}
+      LEFT JOIN student_trainers AS visible_links ON visible_links.student_id = students.id
+        AND visible_links.is_active = 1
+        AND visible_links.ended_at IS NULL
+      LEFT JOIN trainers ON trainers.id = visible_links.trainer_id
+      LEFT JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
+      GROUP BY students.id, own_link.is_active, own_link.inactive_reason
+      ORDER BY students.name
+      `,
     )
-    .all(trainer.id)
+    .all(...params)
 
   response.json({ students })
 })
@@ -333,9 +509,66 @@ app.post('/api/students', (request, response) => {
       restrictions,
       adherence: 0,
       nextReview: 'Agendar',
+      linkStatus: 'active',
       trainers: user.role === 'personal' ? user.name : '',
     },
   })
+})
+
+app.patch('/api/students/:studentId/status', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const studentId = Number(request.params.studentId)
+  const status = String(request.body?.status ?? '').trim()
+  const reason = String(request.body?.reason ?? '').trim()
+
+  if (!Number.isInteger(studentId) || !['active', 'inactive'].includes(status)) {
+    response.status(400).json({ message: 'Aluno ou status invalido.' })
+    return
+  }
+
+  if (user.role === 'admin') {
+    db.prepare('UPDATE students SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, studentId)
+    response.json({ ok: true })
+    return
+  }
+
+  const trainer = getTrainerByUserId(user.id)
+
+  if (!trainer) {
+    response.status(403).json({ message: 'Personal nao encontrado.' })
+    return
+  }
+
+  const result = status === 'active'
+    ? db.prepare(
+      `
+      UPDATE student_trainers
+      SET is_active = 1,
+        inactive_reason = NULL,
+        ended_at = NULL,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE student_id = ? AND trainer_id = ?
+      `,
+    ).run(studentId, trainer.id)
+    : db.prepare(
+      `
+      UPDATE student_trainers
+      SET is_active = 0,
+        inactive_reason = ?,
+        ended_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE student_id = ? AND trainer_id = ?
+      `,
+    ).run(reason, studentId, trainer.id)
+
+  if (result.changes === 0) {
+    response.status(404).json({ message: 'Aluno nao vinculado a este personal.' })
+    return
+  }
+
+  response.json({ ok: true })
 })
 
 app.post('/api/students/:studentId/trainers', (request, response) => {
@@ -366,11 +599,12 @@ app.post('/api/students/:studentId/trainers', (request, response) => {
 
   db.prepare(
     `
-    INSERT INTO student_trainers (student_id, trainer_id, relationship_type, is_active, ended_at)
-    VALUES (?, ?, ?, 1, NULL)
+    INSERT INTO student_trainers (student_id, trainer_id, relationship_type, is_active, inactive_reason, ended_at)
+    VALUES (?, ?, ?, 1, NULL, NULL)
     ON CONFLICT(student_id, trainer_id) DO UPDATE SET
       relationship_type = excluded.relationship_type,
       is_active = 1,
+      inactive_reason = NULL,
       ended_at = NULL,
       updated_at = CURRENT_TIMESTAMP
     `,
@@ -390,6 +624,7 @@ app.delete('/api/students/:studentId/trainers/:trainerId', (request, response) =
     `
     UPDATE student_trainers
     SET is_active = 0,
+      inactive_reason = 'Removido pelo administrador',
       ended_at = CURRENT_TIMESTAMP,
       updated_at = CURRENT_TIMESTAMP
     WHERE student_id = ? AND trainer_id = ?

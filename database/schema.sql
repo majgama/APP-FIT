@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS student_trainers (
   trainer_id INTEGER NOT NULL,
   relationship_type TEXT NOT NULL DEFAULT 'primary' CHECK (relationship_type IN ('primary', 'secondary')),
   is_active INTEGER NOT NULL DEFAULT 1,
+  inactive_reason TEXT,
   started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ended_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -270,7 +271,10 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE TABLE IF NOT EXISTS invitations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   invited_by_user_id INTEGER,
+  trainer_id INTEGER,
+  accepted_student_id INTEGER,
   email TEXT NOT NULL,
+  invite_code TEXT UNIQUE,
   role_id INTEGER NOT NULL,
   token_hash TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'expired', 'cancelled')),
@@ -278,6 +282,8 @@ CREATE TABLE IF NOT EXISTS invitations (
   accepted_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (invited_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (trainer_id) REFERENCES trainers(id) ON DELETE SET NULL,
+  FOREIGN KEY (accepted_student_id) REFERENCES students(id) ON DELETE SET NULL,
   FOREIGN KEY (role_id) REFERENCES user_roles(id)
 );
 
@@ -446,6 +452,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_students_trainer_id ON students(trainer_id);
 CREATE INDEX IF NOT EXISTS idx_student_trainers_student ON student_trainers(student_id);
 CREATE INDEX IF NOT EXISTS idx_student_trainers_trainer ON student_trainers(trainer_id);
+CREATE INDEX IF NOT EXISTS idx_student_trainers_active ON student_trainers(trainer_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_assessments_student_date ON physical_assessments(student_id, assessment_date);
 CREATE INDEX IF NOT EXISTS idx_weekly_plans_student_week ON weekly_plans(student_id, week_start_date);
 CREATE INDEX IF NOT EXISTS idx_daily_workouts_weekly_plan ON daily_workouts(weekly_plan_id);
