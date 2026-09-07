@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from 'react'
+﻿import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   Apple,
@@ -48,6 +48,7 @@ type RegisterUserInput = {
 }
 
 type Student = {
+  id?: number
   name: string
   goal: string
   start: string
@@ -57,6 +58,7 @@ type Student = {
 }
 
 type Exercise = {
+  id?: number
   name: string
   muscle: string
   media: string
@@ -216,7 +218,7 @@ const blankAssessment: Assessment = {
 
 function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(() =>
-    Boolean(localStorage.getItem('app-fit-user-id')),
+    Boolean(localStorage.getItem('app-fit-auth-token')),
   )
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null)
   const [area, setArea] = useState<Area>('personal')
@@ -237,14 +239,54 @@ function App() {
     students.reduce((total, student) => total + student.adherence, 0) / students.length,
   )
 
-  useEffect(() => {
-    const savedUserId = localStorage.getItem('app-fit-user-id')
 
-    if (!savedUserId) return
+  async function apiRequest(path: string, options: RequestInit = {}) {
+    const token = localStorage.getItem('app-fit-auth-token')
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    })
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.message ?? 'Nao foi possivel concluir a operacao.')
+    }
+
+    return data
+  }
+
+  async function fetchAppData(token: string, role: Area) {
+    try {
+      const exerciseData = await apiRequest('/api/exercises', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      setExerciseCatalog(exerciseData.exercises as Exercise[])
+
+      if (role === 'admin' || role === 'personal') {
+        const studentData = await apiRequest('/api/students', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const savedStudents = studentData.students as Student[]
+        setStudents(savedStudents.length ? savedStudents : initialStudents)
+        setSelectedStudent(savedStudents[0]?.name ?? initialStudents[0].name)
+      }
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem('app-fit-auth-token')
+
+    if (!savedToken) return
 
     fetch('/api/auth/me', {
       headers: {
-        'x-user-id': savedUserId,
+        Authorization: `Bearer ${savedToken}`,
       },
     })
       .then(async (response) => {
@@ -255,8 +297,9 @@ function App() {
       .then((user) => {
         setCurrentUser(user)
         setArea(user.role)
+        fetchAppData(savedToken, user.role)
       })
-      .catch(() => localStorage.removeItem('app-fit-user-id'))
+      .catch(() => localStorage.removeItem('app-fit-auth-token'))
       .finally(() => setIsAuthLoading(false))
   }, [])
 
@@ -320,7 +363,7 @@ function App() {
   }
 
   function logout() {
-    localStorage.removeItem('app-fit-user-id')
+    localStorage.removeItem('app-fit-auth-token')
     setCurrentUser(null)
   }
 
@@ -970,3 +1013,5 @@ function AdminArea({ students, exercises }: { students: Student[]; exercises: Ex
 }
 
 export default App
+
+
