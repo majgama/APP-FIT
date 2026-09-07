@@ -820,3 +820,16 @@ textarea {
     width: 100%;
   }
 }
+
+.neutral-message {
+  color: #fff2c4;
+  background: rgba(244, 200, 106, 0.12);
+}
+
+.student-row.readonly {
+  cursor: default;
+}
+
+.student-row.readonly:hover {
+  transform: none;
+}

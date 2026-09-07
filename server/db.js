@@ -1,4 +1,4 @@
-﻿import bcrypt from 'bcryptjs'
+import bcrypt from 'bcryptjs'
 import Database from 'better-sqlite3'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -91,6 +91,13 @@ for (const user of demoUsers) {
   })
 }
 
+db.exec(`
+  INSERT OR IGNORE INTO trainers (user_id, specialty)
+  SELECT users.id, 'Assessoria fitness online'
+  FROM users
+  JOIN user_roles ON user_roles.id = users.role_id
+  WHERE user_roles.name = 'personal'
+`)
 const studentCount = db.prepare('SELECT COUNT(*) AS total FROM students').get()
 
 if (studentCount.total === 0) {
@@ -104,6 +111,26 @@ if (studentCount.total === 0) {
   }
 }
 
+db.exec(`
+  UPDATE students
+  SET trainer_id = (
+    SELECT trainers.id
+    FROM trainers
+    JOIN users ON users.id = trainers.user_id
+    WHERE users.email = 'personal@appfit.local'
+    LIMIT 1
+  )
+  WHERE trainer_id IS NULL
+`)
+
+db.exec(`
+  INSERT OR IGNORE INTO student_trainers (student_id, trainer_id, relationship_type)
+  SELECT students.id, trainers.id, 'primary'
+  FROM students
+  JOIN trainers
+  JOIN users ON users.id = trainers.user_id
+  WHERE users.email = 'personal@appfit.local'
+`)
 const exerciseCount = db.prepare('SELECT COUNT(*) AS total FROM exercises').get()
 
 if (exerciseCount.total === 0) {

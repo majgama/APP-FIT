@@ -1,4 +1,4 @@
-﻿import bcrypt from 'bcryptjs'
+import bcrypt from 'bcryptjs'
 import express from 'express'
 import { createHash, randomBytes } from 'node:crypto'
 import { db, toPublicUser } from './db.js'
@@ -68,6 +68,19 @@ function requireUser(request, response) {
   }
 
   return user
+}
+
+
+function getTrainerByUserId(userId) {
+  return db.prepare('SELECT id, user_id AS userId FROM trainers WHERE user_id = ?').get(userId)
+}
+
+function ensureTrainerForUser(userId) {
+  db.prepare('INSERT OR IGNORE INTO trainers (user_id, specialty) VALUES (?, ?)').run(
+    userId,
+    'Assessoria fitness online',
+  )
+  return getTrainerByUserId(userId)
 }
 
 function requireRole(request, response, allowedRoles) {
@@ -163,29 +176,95 @@ app.post('/api/auth/register', (request, response) => {
     role: roleRecord.name,
   }
 
+  if (roleRecord.name === 'personal') {
+    ensureTrainerForUser(user.id)
+  }
+
   response.status(201).json({ user, token: createSession(user.id) })
+})
+
+app.get('/api/trainers', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const whereClause = user.role === 'personal' ? 'WHERE users.id = ?' : ''
+  const params = user.role === 'personal' ? [user.id] : []
+
+  const trainers = db
+    .prepare(
+      `
+      SELECT
+        trainers.id,
+        users.name,
+        users.email,
+        COALESCE(trainers.specialty, '') AS specialty
+      FROM trainers
+      JOIN users ON users.id = trainers.user_id
+      ${whereClause}
+      ORDER BY users.name
+      `,
+    )
+    .all(...params)
+
+  response.json({ trainers })
 })
 
 app.get('/api/students', (request, response) => {
   const user = requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
+  const baseSelect = `
+    SELECT
+      students.id,
+      students.name,
+      COALESCE(students.goal, '') AS goal,
+      COALESCE(students.start_date, '') AS start,
+      COALESCE(students.restrictions, '') AS restrictions,
+      0 AS adherence,
+      'Agendar' AS nextReview,
+      COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers
+    FROM students
+    LEFT JOIN student_trainers ON student_trainers.student_id = students.id
+      AND student_trainers.is_active = 1
+      AND student_trainers.ended_at IS NULL
+    LEFT JOIN trainers ON trainers.id = student_trainers.trainer_id
+    LEFT JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
+  `
+
+  if (user.role === 'admin') {
+    const students = db
+      .prepare(
+        `${baseSelect}
+        GROUP BY students.id
+        ORDER BY students.name`,
+      )
+      .all()
+
+    response.json({ students })
+    return
+  }
+
+  const trainer = getTrainerByUserId(user.id)
+
+  if (!trainer) {
+    response.json({ students: [] })
+    return
+  }
+
   const students = db
     .prepare(
-      `
-      SELECT
-        id,
-        name,
-        COALESCE(goal, '') AS goal,
-        COALESCE(start_date, '') AS start,
-        COALESCE(restrictions, '') AS restrictions,
-        0 AS adherence,
-        'Agendar' AS nextReview
-      FROM students
-      ORDER BY name
-      `,
+      `${baseSelect}
+      WHERE students.id IN (
+        SELECT student_id
+        FROM student_trainers
+        WHERE trainer_id = ?
+          AND is_active = 1
+          AND ended_at IS NULL
+      )
+      GROUP BY students.id
+      ORDER BY students.name`,
     )
-    .all()
+    .all(trainer.id)
 
   response.json({ students })
 })
@@ -198,6 +277,7 @@ app.post('/api/students', (request, response) => {
   const goal = String(request.body?.goal ?? '').trim()
   const start = String(request.body?.start ?? '').trim()
   const restrictions = String(request.body?.restrictions ?? '').trim()
+  const trainerIds = Array.isArray(request.body?.trainerIds) ? request.body.trainerIds : []
   const startDate = start || new Date().toISOString().slice(0, 10)
 
   if (!name) {
@@ -205,26 +285,118 @@ app.post('/api/students', (request, response) => {
     return
   }
 
-  const result = db
-    .prepare(
-      `
-      INSERT INTO students (name, goal, start_date, restrictions)
-      VALUES (?, ?, ?, ?)
-      `,
-    )
-    .run(name, goal, startDate, restrictions)
+  const transaction = db.transaction(() => {
+    const result = db
+      .prepare(
+        `
+        INSERT INTO students (name, goal, start_date, restrictions)
+        VALUES (?, ?, ?, ?)
+        `,
+      )
+      .run(name, goal, startDate, restrictions)
+
+    const studentId = result.lastInsertRowid
+    const linkTrainer = db.prepare(`
+      INSERT OR IGNORE INTO student_trainers (student_id, trainer_id, relationship_type)
+      VALUES (?, ?, ?)
+    `)
+
+    if (user.role === 'personal') {
+      const trainer = ensureTrainerForUser(user.id)
+      linkTrainer.run(studentId, trainer.id, 'primary')
+      db.prepare('UPDATE students SET trainer_id = ? WHERE id = ?').run(trainer.id, studentId)
+    }
+
+    if (user.role === 'admin') {
+      const validTrainerIds = trainerIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+
+      for (const trainerId of validTrainerIds) {
+        linkTrainer.run(studentId, trainerId, 'secondary')
+      }
+
+      if (validTrainerIds[0]) {
+        db.prepare('UPDATE students SET trainer_id = ? WHERE id = ?').run(validTrainerIds[0], studentId)
+      }
+    }
+
+    return studentId
+  })
+
+  const studentId = transaction()
 
   response.status(201).json({
     student: {
-      id: result.lastInsertRowid,
+      id: studentId,
       name,
       goal,
       start: startDate,
       restrictions,
       adherence: 0,
       nextReview: 'Agendar',
+      trainers: user.role === 'personal' ? user.name : '',
     },
   })
+})
+
+app.post('/api/students/:studentId/trainers', (request, response) => {
+  const user = requireRole(request, response, ['admin'])
+  if (!user) return
+
+  const studentId = Number(request.params.studentId)
+  const trainerId = Number(request.body?.trainerId)
+  const relationshipType = String(request.body?.relationshipType ?? 'secondary')
+
+  if (!Number.isInteger(studentId) || !Number.isInteger(trainerId)) {
+    response.status(400).json({ message: 'Aluno ou personal invalido.' })
+    return
+  }
+
+  if (!['primary', 'secondary'].includes(relationshipType)) {
+    response.status(400).json({ message: 'Tipo de vinculo invalido.' })
+    return
+  }
+
+  const student = db.prepare('SELECT id FROM students WHERE id = ?').get(studentId)
+  const trainer = db.prepare('SELECT id FROM trainers WHERE id = ?').get(trainerId)
+
+  if (!student || !trainer) {
+    response.status(404).json({ message: 'Aluno ou personal nao encontrado.' })
+    return
+  }
+
+  db.prepare(
+    `
+    INSERT INTO student_trainers (student_id, trainer_id, relationship_type, is_active, ended_at)
+    VALUES (?, ?, ?, 1, NULL)
+    ON CONFLICT(student_id, trainer_id) DO UPDATE SET
+      relationship_type = excluded.relationship_type,
+      is_active = 1,
+      ended_at = NULL,
+      updated_at = CURRENT_TIMESTAMP
+    `,
+  ).run(studentId, trainerId, relationshipType)
+
+  response.status(201).json({ ok: true })
+})
+
+app.delete('/api/students/:studentId/trainers/:trainerId', (request, response) => {
+  const user = requireRole(request, response, ['admin'])
+  if (!user) return
+
+  const studentId = Number(request.params.studentId)
+  const trainerId = Number(request.params.trainerId)
+
+  db.prepare(
+    `
+    UPDATE student_trainers
+    SET is_active = 0,
+      ended_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE student_id = ? AND trainer_id = ?
+    `,
+  ).run(studentId, trainerId)
+
+  response.json({ ok: true })
 })
 
 app.get('/api/exercises', (request, response) => {
@@ -316,4 +488,3 @@ app.post('/api/exercises', (request, response) => {
 app.listen(port, '127.0.0.1', () => {
   console.log(`APP-FIT API rodando em http://127.0.0.1:${port}`)
 })
-

@@ -1,4 +1,4 @@
-﻿import { type FormEvent, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   Apple,
@@ -55,6 +55,7 @@ type Student = {
   restrictions: string
   adherence: number
   nextReview: string
+  trainers?: string
 }
 
 type Exercise = {
@@ -70,6 +71,13 @@ type Exercise = {
   notes: string
 }
 
+
+type Trainer = {
+  id: number
+  name: string
+  email: string
+  specialty: string
+}
 type Meal = {
   name: string
   amount: string
@@ -227,6 +235,7 @@ function App() {
   const [studentForm, setStudentForm] = useState(blankStudent)
   const [exerciseForm, setExerciseForm] = useState(blankExercise)
   const [exerciseCatalog, setExerciseCatalog] = useState(initialExercises)
+  const [trainers, setTrainers] = useState<Trainer[]>([])
   const [assessment, setAssessment] = useState(blankAssessment)
   const [studentDoubt, setStudentDoubt] = useState('')
 
@@ -266,6 +275,12 @@ function App() {
       })
       setExerciseCatalog(exerciseData.exercises as Exercise[])
 
+      if (role === 'admin' || role === 'personal') {
+        const trainerData = await apiRequest('/api/trainers', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        setTrainers(trainerData.trainers as Trainer[])
+      }
       if (role === 'admin' || role === 'personal') {
         const studentData = await apiRequest('/api/students', {
           headers: { Authorization: `Bearer ${token}` },
@@ -377,6 +392,22 @@ function App() {
       .catch((error) => error.message)
 
     if (errorMessage) alert(errorMessage)
+  }
+
+
+  async function linkStudentToTrainer(studentId: number, trainerId: number) {
+    if (!currentUser || currentUser.role !== 'admin') return 'Somente admin pode vincular alunos e personais.'
+
+    return apiRequest(`/api/students/${studentId}/trainers`, {
+      method: 'POST',
+      body: JSON.stringify({ trainerId, relationshipType: 'secondary' }),
+    })
+      .then(() => {
+        const token = localStorage.getItem('app-fit-auth-token')
+        if (token) fetchAppData(token, currentUser.role)
+        return ''
+      })
+      .catch((error) => error.message)
   }
 
   function logout() {
@@ -535,7 +566,7 @@ function App() {
                     >
                       <span>
                         <strong>{student.name}</strong>
-                        <small>{student.goal}</small>
+                        <small>{student.trainers ? student.goal + ' - ' + student.trainers : student.goal}</small>
                       </span>
                       <b>{student.adherence}%</b>
                     </button>
@@ -609,7 +640,14 @@ function App() {
           />
         ) : null}
 
-        {area === 'admin' ? <AdminArea students={students} exercises={exerciseCatalog} /> : null}
+        {area === 'admin' ? (
+          <AdminArea
+            students={students}
+            exercises={exerciseCatalog}
+            trainers={trainers}
+            onLinkStudentTrainer={linkStudentToTrainer}
+          />
+        ) : null}
       </section>
     </main>
   )
@@ -999,20 +1037,83 @@ function StudentArea({
   )
 }
 
-function AdminArea({ students, exercises }: { students: Student[]; exercises: Exercise[] }) {
+function AdminArea({
+  students,
+  exercises,
+  trainers,
+  onLinkStudentTrainer,
+}: {
+  students: Student[]
+  exercises: Exercise[]
+  trainers: Trainer[]
+  onLinkStudentTrainer: (studentId: number, trainerId: number) => Promise<string>
+}) {
+  const [studentId, setStudentId] = useState('')
+  const [trainerId, setTrainerId] = useState('')
+  const [message, setMessage] = useState('')
+
+  async function submitLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!studentId || !trainerId) {
+      setMessage('Selecione aluno e personal.')
+      return
+    }
+
+    const errorMessage = await onLinkStudentTrainer(Number(studentId), Number(trainerId))
+    setMessage(errorMessage || 'Vinculo criado com sucesso.')
+  }
+
   return (
     <>
       <section className="metrics-grid">
-        <Metric icon={Users} label="Usuarios" value={String(students.length + 2)} detail="Admin, personal e alunos" />
+        <Metric icon={Users} label="Usuarios" value={String(students.length + trainers.length + 1)} detail="Admin, personal e alunos" />
         <Metric icon={Dumbbell} label="Exercicios" value={String(exercises.length)} detail="Biblioteca cadastrada" />
-        <Metric icon={BarChart3} label="Planos" value="12" detail="Semanais e diarios" />
+        <Metric icon={BarChart3} label="Personais" value={String(trainers.length)} detail="Com acesso controlado" />
       </section>
 
-      <section className="panel full-panel" id="admin">
+      <section className="content-grid">
+        <Panel id="admin" eyebrow="Area de adm" title="Vincular aluno ao personal">
+          <form className="form-grid" onSubmit={submitLink}>
+            <select aria-label="Aluno" onChange={(event) => setStudentId(event.target.value)} value={studentId}>
+              <option value="">Selecione o aluno</option>
+              {students.filter((student) => student.id).map((student) => (
+                <option key={student.id} value={student.id}>{student.name}</option>
+              ))}
+            </select>
+            <select aria-label="Personal" onChange={(event) => setTrainerId(event.target.value)} value={trainerId}>
+              <option value="">Selecione o personal</option>
+              {trainers.map((trainer) => (
+                <option key={trainer.id} value={trainer.id}>{trainer.name}</option>
+              ))}
+            </select>
+            {message ? <p className="form-message neutral-message">{message}</p> : null}
+            <button className="primary-button" type="submit">
+              <UserCog size={18} />
+              Vincular acesso
+            </button>
+          </form>
+        </Panel>
+
+        <Panel eyebrow="Acessos" title="Alunos e personais vinculados">
+          <div className="student-list">
+            {students.map((student) => (
+              <div className="student-row readonly" key={student.id ?? student.name}>
+                <span>
+                  <strong>{student.name}</strong>
+                  <small>{student.trainers || 'Sem personal vinculado'}</small>
+                </span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </section>
+
+      <section className="panel full-panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Area de adm</p>
-            <h2>Cadastros e permissoes</h2>
+            <p className="eyebrow">Cadastros gerais</p>
+            <h2>Modulo administrativo</h2>
           </div>
         </div>
         <div className="admin-grid">
@@ -1030,6 +1131,3 @@ function AdminArea({ students, exercises }: { students: Student[]; exercises: Ex
 }
 
 export default App
-
-
-
