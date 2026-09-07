@@ -14,7 +14,10 @@ function hashToken(token) {
 
 function createSession(userId) {
   const token = randomBytes(32).toString('hex')
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString()
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30)
+    .toISOString()
+    .slice(0, 19)
+    .replace('T', ' ')
 
   db.prepare(
     `
@@ -313,3 +316,4 @@ app.post('/api/exercises', (request, response) => {
 app.listen(port, '127.0.0.1', () => {
   console.log(`APP-FIT API rodando em http://127.0.0.1:${port}`)
 })
+

@@ -316,9 +316,10 @@ function App() {
     }
 
     const user = data.user as AppUser
-    localStorage.setItem('app-fit-user-id', String(user.id))
+    localStorage.setItem('app-fit-auth-token', data.token)
     setCurrentUser(user)
     setArea(user.role)
+    fetchAppData(data.token, user.role)
     return ''
   }
 
@@ -335,31 +336,47 @@ function App() {
     }
 
     const newUser = data.user as AppUser
-    localStorage.setItem('app-fit-user-id', String(newUser.id))
+    localStorage.setItem('app-fit-auth-token', data.token)
     setCurrentUser(newUser)
     setArea(newUser.role)
+    fetchAppData(data.token, newUser.role)
     return ''
   }
 
-  function addStudent() {
+  async function addStudent() {
     if (!studentForm.name.trim()) return
 
-    const newStudent = {
-      ...studentForm,
-      adherence: 0,
-      start: studentForm.start || new Date().toISOString().slice(0, 10),
-      nextReview: studentForm.nextReview || 'Agendar',
-    }
+    const errorMessage = await apiRequest('/api/students', {
+      method: 'POST',
+      body: JSON.stringify(studentForm),
+    })
+      .then((data) => {
+        const newStudent = data.student as Student
+        setStudents((current) => [...current, newStudent])
+        setSelectedStudent(newStudent.name)
+        setStudentForm(blankStudent)
+        return ''
+      })
+      .catch((error) => error.message)
 
-    setStudents((current) => [...current, newStudent])
-    setSelectedStudent(newStudent.name)
-    setStudentForm(blankStudent)
+    if (errorMessage) alert(errorMessage)
   }
 
-  function addExercise() {
+  async function addExercise() {
     if (!exerciseForm.name.trim() || !exerciseForm.muscle.trim()) return
-    setExerciseCatalog((current) => [...current, exerciseForm])
-    setExerciseForm(blankExercise)
+
+    const errorMessage = await apiRequest('/api/exercises', {
+      method: 'POST',
+      body: JSON.stringify(exerciseForm),
+    })
+      .then((data) => {
+        setExerciseCatalog((current) => [...current, data.exercise as Exercise])
+        setExerciseForm(blankExercise)
+        return ''
+      })
+      .catch((error) => error.message)
+
+    if (errorMessage) alert(errorMessage)
   }
 
   function logout() {
@@ -1013,5 +1030,6 @@ function AdminArea({ students, exercises }: { students: Student[]; exercises: Ex
 }
 
 export default App
+
 
 
