@@ -26,6 +26,7 @@ import {
   Power,
   Save,
   ShieldCheck,
+  Trash2,
   UserPlus,
   UserCog,
   Users,
@@ -79,6 +80,7 @@ type Exercise = {
   load: LoadLevel
   rest: string
   notes: string
+  visibility?: 'platform' | 'private'
 }
 
 
@@ -139,6 +141,55 @@ type WorkoutPlan = {
   weekStartDate: string
   notes: string
   createdAt?: string
+  status: 'active' | 'completed'
+  completedAt?: string
+  days: AppliedWorkoutDay[]
+}
+
+type AppliedWorkoutDay = {
+  id: number
+  dayOfWeek: string
+  name: string
+  instructions: string
+  exercises: Exercise[]
+}
+
+type DailyTemplate = {
+  id: number
+  name: string
+  description: string
+  visibility: 'platform' | 'private'
+  exercises: Exercise[]
+}
+
+type WeeklyTemplateDay = {
+  dayOfWeek: string
+  dayName: string
+  dailyTemplateId: number | null
+  workoutName: string
+  instructions: string
+  exercises: Exercise[]
+}
+
+type WeeklyTemplate = {
+  id: number
+  name: string
+  description: string
+  visibility: 'platform' | 'private'
+  days: WeeklyTemplateDay[]
+}
+
+type WorkoutLibrary = {
+  exercises: Exercise[]
+  dailyTemplates: DailyTemplate[]
+  weeklyTemplates: WeeklyTemplate[]
+}
+
+type WeeklyPlanInput = {
+  templateId: number
+  name: string
+  weekStartDate: string
+  notes: string
 }
 
 type DietPlan = {
@@ -209,6 +260,16 @@ const weeklyPlan = [
   { day: 'Sexta', title: 'Superiores pull', status: 'Pronto', done: false },
 ]
 
+const weekDayOptions = [
+  { key: 'monday', label: 'Segunda' },
+  { key: 'tuesday', label: 'Terca' },
+  { key: 'wednesday', label: 'Quarta' },
+  { key: 'thursday', label: 'Quinta' },
+  { key: 'friday', label: 'Sexta' },
+  { key: 'saturday', label: 'Sabado' },
+  { key: 'sunday', label: 'Domingo' },
+]
+
 const measurements = [
   'Peso (kg)',
   'Altura',
@@ -273,6 +334,8 @@ const blankAssessment: Assessment = {
   photos: [],
 }
 
+const blankWorkoutLibrary: WorkoutLibrary = { exercises: [], dailyTemplates: [], weeklyTemplates: [] }
+
 function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(() =>
     Boolean(localStorage.getItem('app-fit-auth-token')),
@@ -291,6 +354,7 @@ function App() {
   const [bodyGoals, setBodyGoals] = useState<BodyGoal[]>([])
   const [workoutPlans, setWorkoutPlans] = useState<WorkoutPlan[]>([])
   const [dietPlans, setDietPlans] = useState<DietPlan[]>([])
+  const [workoutLibrary, setWorkoutLibrary] = useState<WorkoutLibrary>(blankWorkoutLibrary)
   const [folderLoading, setFolderLoading] = useState(false)
   const [studentDoubt, setStudentDoubt] = useState('')
   const [invitationToken, setInvitationToken] = useState('')
@@ -340,6 +404,10 @@ function App() {
           headers: { Authorization: `Bearer ${token}` },
         })
         setTrainers(trainerData.trainers as Trainer[])
+        const libraryData = await apiRequest('/api/workout-library', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        setWorkoutLibrary(libraryData as WorkoutLibrary)
       }
       if (role === 'admin' || role === 'personal') {
         const studentData = await apiRequest('/api/students', {
@@ -573,13 +641,59 @@ function App() {
       .catch((error) => error.message)
   }
 
-  async function saveWorkoutPlan(plan: Omit<WorkoutPlan, 'id'>) {
+  async function saveWorkoutPlan(plan: WeeklyPlanInput) {
     if (!activeStudent.id) return 'Selecione um aluno vinculado.'
 
     return apiRequest(`/api/students/${activeStudent.id}/workout-plans`, {
       method: 'POST',
       body: JSON.stringify(plan),
     })
+      .then(async () => {
+        await refreshStudentFolder(activeStudent.id!)
+        return ''
+      })
+      .catch((error) => error.message)
+  }
+
+  async function refreshWorkoutLibrary() {
+    const data = await apiRequest('/api/workout-library')
+    setWorkoutLibrary(data as WorkoutLibrary)
+    return data as WorkoutLibrary
+  }
+
+  async function createLibraryExercise(exercise: Exercise) {
+    return apiRequest('/api/workout-library/exercises', {
+      method: 'POST',
+      body: JSON.stringify(exercise),
+    })
+      .then(async (data) => {
+        await refreshWorkoutLibrary()
+        return { exercise: data.exercise as Exercise, error: '' }
+      })
+      .catch((error) => ({ exercise: null, error: error.message as string }))
+  }
+
+  async function createDailyTemplate(input: { name: string; description: string; exercises: Array<{ exerciseId: number; sets: string; reps: string; load: LoadLevel; rest: string; notes: string }> }) {
+    return apiRequest('/api/workout-library/daily-templates', { method: 'POST', body: JSON.stringify(input) })
+      .then(async (data) => {
+        const library = await refreshWorkoutLibrary()
+        return { template: library.dailyTemplates.find((item) => item.id === Number(data.id)) ?? null, error: '' }
+      })
+      .catch((error) => ({ template: null, error: error.message as string }))
+  }
+
+  async function createWeeklyTemplate(input: { name: string; description: string; days: Array<{ dayOfWeek: string; dailyTemplateId: number | null }> }) {
+    return apiRequest('/api/workout-library/weekly-templates', { method: 'POST', body: JSON.stringify(input) })
+      .then(async (data) => {
+        const library = await refreshWorkoutLibrary()
+        return { template: library.weeklyTemplates.find((item) => item.id === Number(data.id)) ?? null, error: '' }
+      })
+      .catch((error) => ({ template: null, error: error.message as string }))
+  }
+
+  async function completeWorkoutPlan(planId: number) {
+    if (!activeStudent.id) return 'Aluno nao encontrado.'
+    return apiRequest(`/api/workout-plans/${planId}/complete`, { method: 'PATCH' })
       .then(async () => {
         await refreshStudentFolder(activeStudent.id!)
         return ''
@@ -890,12 +1004,16 @@ function App() {
               assessments={assessments}
               bodyGoals={bodyGoals}
               workoutPlans={workoutPlans}
+              workoutLibrary={workoutLibrary}
               dietPlans={dietPlans}
               loading={folderLoading}
               canCreatePlans
               onSaveAssessment={saveAssessment}
               onSaveWorkoutPlan={saveWorkoutPlan}
               onSaveDietPlan={saveDietPlan}
+              onCreateExercise={createLibraryExercise}
+              onCreateDaily={createDailyTemplate}
+              onCreateWeekly={createWeeklyTemplate}
             />
           </>
         ) : null}
@@ -908,6 +1026,7 @@ function App() {
             assessments={assessments}
             bodyGoals={bodyGoals}
             workoutPlans={workoutPlans}
+            onCompleteWorkoutPlan={completeWorkoutPlan}
             dietPlans={dietPlans}
             loading={folderLoading}
             onSaveAssessment={saveAssessment}
@@ -922,6 +1041,10 @@ function App() {
             exercises={exerciseCatalog}
             trainers={trainers}
             onLinkStudentTrainer={linkStudentToTrainer}
+            workoutLibrary={workoutLibrary}
+            onCreateExercise={createLibraryExercise}
+            onCreateDaily={createDailyTemplate}
+            onCreateWeekly={createWeeklyTemplate}
           />
         ) : null}
       </section>
@@ -1465,24 +1588,194 @@ function EvolutionChart({ assessments }: { assessments: Assessment[] }) {
   )
 }
 
-function PlanCreator({
-  onSaveWorkout,
-  onSaveDiet,
+function WeeklyPlanBuilder({
+  library,
+  canApply,
+  onApply,
+  onCreateExercise,
+  onCreateDaily,
+  onCreateWeekly,
 }: {
-  onSaveWorkout: (plan: Omit<WorkoutPlan, 'id'>) => Promise<string>
+  library: WorkoutLibrary
+  canApply: boolean
+  onApply: (plan: WeeklyPlanInput) => Promise<string>
+  onCreateExercise: (exercise: Exercise) => Promise<{ exercise: Exercise | null; error: string }>
+  onCreateDaily: (input: { name: string; description: string; exercises: Array<{ exerciseId: number; sets: string; reps: string; load: LoadLevel; rest: string; notes: string }> }) => Promise<{ template: DailyTemplate | null; error: string }>
+  onCreateWeekly: (input: { name: string; description: string; days: Array<{ dayOfWeek: string; dailyTemplateId: number | null }> }) => Promise<{ template: WeeklyTemplate | null; error: string }>
+}) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [creating, setCreating] = useState(false)
+  const [selectedDay, setSelectedDay] = useState('monday')
+  const [planName, setPlanName] = useState('')
+  const [planDescription, setPlanDescription] = useState('')
+  const [weekStartDate, setWeekStartDate] = useState(today)
+  const [dayTemplates, setDayTemplates] = useState<Record<string, number | null>>({})
+  const [creatingDaily, setCreatingDaily] = useState(false)
+  const [dailyName, setDailyName] = useState('')
+  const [dailyDescription, setDailyDescription] = useState('')
+  const [dailyExercises, setDailyExercises] = useState<Exercise[]>([])
+  const [newExercise, setNewExercise] = useState(blankExercise)
+  const [showExerciseForm, setShowExerciseForm] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const platformPlans = library.weeklyTemplates.filter((item) => item.visibility === 'platform')
+  const privatePlans = library.weeklyTemplates.filter((item) => item.visibility === 'private')
+  const platformDaily = library.dailyTemplates.filter((item) => item.visibility === 'platform')
+  const privateDaily = library.dailyTemplates.filter((item) => item.visibility === 'private')
+  const platformExercises = library.exercises.filter((item) => item.visibility === 'platform')
+  const privateExercises = library.exercises.filter((item) => item.visibility === 'private')
+
+  async function applyTemplate(template: WeeklyTemplate) {
+    const error = await onApply({ templateId: template.id, name: template.name, weekStartDate, notes: template.description })
+    setMessage(error || 'Plano aplicado ao aluno com sucesso.')
+  }
+
+  function addExercise(exercise: Exercise) {
+    setDailyExercises((current) => current.some((item) => item.id === exercise.id) ? current : [...current, exercise])
+  }
+
+  async function saveNewExercise() {
+    const result = await onCreateExercise(newExercise)
+    setMessage(result.error || 'Exercicio criado e adicionado ao treino.')
+    if (result.exercise) {
+      addExercise(result.exercise)
+      setNewExercise(blankExercise)
+      setShowExerciseForm(false)
+    }
+  }
+
+  async function saveDailyTemplate() {
+    if (!dailyName.trim()) return setMessage('Informe o nome do treino diario.')
+    const result = await onCreateDaily({
+      name: dailyName,
+      description: dailyDescription,
+      exercises: dailyExercises.filter((item) => item.id).map((item) => ({
+        exerciseId: item.id!, sets: item.sets, reps: item.reps, load: item.load, rest: item.rest, notes: item.notes,
+      })),
+    })
+    setMessage(result.error || 'Treino diario salvo e selecionado.')
+    if (result.template) {
+      setDayTemplates((current) => ({ ...current, [selectedDay]: result.template!.id }))
+      setDailyName('')
+      setDailyDescription('')
+      setDailyExercises([])
+      setCreatingDaily(false)
+    }
+  }
+
+  async function saveWeeklyPlan() {
+    if (!planName.trim()) return setMessage('Informe o nome do plano semanal.')
+    const result = await onCreateWeekly({
+      name: planName,
+      description: planDescription,
+      days: weekDayOptions.map((day) => ({ dayOfWeek: day.key, dailyTemplateId: dayTemplates[day.key] ?? null })),
+    })
+    if (result.error || !result.template) return setMessage(result.error || 'Nao foi possivel criar o plano.')
+    if (canApply) {
+      const error = await onApply({ templateId: result.template.id, name: result.template.name, weekStartDate, notes: result.template.description })
+      setMessage(error || 'Plano criado e aplicado ao aluno.')
+    } else {
+      setMessage('Modelo semanal criado para todos os personais.')
+    }
+    setCreating(false)
+  }
+
+  function templateList(title: string, templates: WeeklyTemplate[]) {
+    return (
+      <div className="library-column">
+        <h4>{title}</h4>
+        {templates.length ? templates.map((template) => (
+          <article className="library-item" key={template.id}>
+            <span><strong>{template.name}</strong><small>{template.days.filter((day) => day.dailyTemplateId).length} treinos + {template.days.filter((day) => !day.dailyTemplateId).length} descansos</small></span>
+            {canApply ? <button className="mini-action" onClick={() => applyTemplate(template)} type="button">Aplicar</button> : null}
+          </article>
+        )) : <p className="empty-state">Nenhum modelo cadastrado.</p>}
+      </div>
+    )
+  }
+
+  function dailyList(title: string, templates: DailyTemplate[]) {
+    return (
+      <div className="library-column">
+        <h4>{title}</h4>
+        {templates.length ? templates.map((template) => (
+          <button className={dayTemplates[selectedDay] === template.id ? 'library-choice selected' : 'library-choice'} key={template.id} onClick={() => setDayTemplates((current) => ({ ...current, [selectedDay]: template.id }))} type="button">
+            <strong>{template.name}</strong><small>{template.exercises.length} exercicios</small>
+          </button>
+        )) : <p className="empty-state">Nenhum treino cadastrado.</p>}
+      </div>
+    )
+  }
+
+  function exerciseList(title: string, exercises: Exercise[]) {
+    return (
+      <div className="library-column">
+        <h4>{title}</h4>
+        {exercises.length ? exercises.map((exercise) => (
+          <button className="library-choice" key={exercise.id} onClick={() => addExercise(exercise)} type="button">
+            <strong>{exercise.name}</strong><small>{exercise.muscle}</small><Plus size={15} />
+          </button>
+        )) : <p className="empty-state">Nenhum exercicio cadastrado.</p>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="weekly-builder">
+      {!creating ? (
+        <>
+          <div className="builder-toolbar">
+            <label className="field-label">Inicio do plano<input type="date" value={weekStartDate} onChange={(event) => setWeekStartDate(event.target.value)} /></label>
+            <button className="primary-button" onClick={() => setCreating(true)} type="button"><Plus size={18} /> Criar novo plano</button>
+          </div>
+          <div className="library-split">{templateList('Planos da plataforma', platformPlans)}{templateList('Meus planos personalizados', privatePlans)}</div>
+        </>
+      ) : (
+        <>
+          <div className="builder-toolbar">
+            <input aria-label="Nome do plano semanal" placeholder="Nome do plano semanal" value={planName} onChange={(event) => setPlanName(event.target.value)} />
+            <input aria-label="Inicio do plano" type="date" value={weekStartDate} onChange={(event) => setWeekStartDate(event.target.value)} />
+            <button className="secondary-button" onClick={() => setCreating(false)} type="button">Cancelar</button>
+          </div>
+          <textarea aria-label="Descricao do plano" className="standalone-note" placeholder="Objetivo e orientacoes gerais do plano" value={planDescription} onChange={(event) => setPlanDescription(event.target.value)} />
+          <div className="day-tabs">
+            {weekDayOptions.map((day) => (
+              <button className={selectedDay === day.key ? 'active' : ''} key={day.key} onClick={() => { setSelectedDay(day.key); setCreatingDaily(false) }} type="button">
+                {day.label}<small>{dayTemplates[day.key] ? 'Treino selecionado' : 'Descanso'}</small>
+              </button>
+            ))}
+          </div>
+          {!creatingDaily ? (
+            <>
+              <div className="day-builder-heading"><strong>{weekDayOptions.find((day) => day.key === selectedDay)?.label}</strong><button className="mini-action" onClick={() => setDayTemplates((current) => ({ ...current, [selectedDay]: null }))} type="button">Definir descanso</button></div>
+              <div className="library-split">{dailyList('Treinos da plataforma', platformDaily)}{dailyList('Meus treinos diarios', privateDaily)}</div>
+              <button className="secondary-button" onClick={() => setCreatingDaily(true)} type="button"><Plus size={18} /> Criar novo treino diario</button>
+            </>
+          ) : (
+            <div className="daily-composer">
+              <div className="builder-toolbar"><input aria-label="Nome do treino diario" placeholder="Nome do treino diario" value={dailyName} onChange={(event) => setDailyName(event.target.value)} /><button className="secondary-button" onClick={() => setCreatingDaily(false)} type="button">Voltar</button></div>
+              <textarea aria-label="Orientacoes do treino" className="standalone-note" placeholder="Orientacoes do treino" value={dailyDescription} onChange={(event) => setDailyDescription(event.target.value)} />
+              <div className="library-split">{exerciseList('Exercicios da plataforma', platformExercises)}{exerciseList('Meus exercicios', privateExercises)}</div>
+              <button className="secondary-button" onClick={() => setShowExerciseForm((current) => !current)} type="button"><Plus size={18} /> Criar novo exercicio</button>
+              {showExerciseForm ? <ExerciseForm exerciseForm={newExercise} setExerciseForm={setNewExercise} addExercise={saveNewExercise} /> : null}
+              <div className="selected-exercises"><h4>Exercicios do treino ({dailyExercises.length})</h4>{dailyExercises.map((exercise, index) => <article className="exercise-row" key={`${exercise.id}-${index}`}><Dumbbell size={17} /><span><strong>{exercise.name}</strong><small>{exercise.sets}x{exercise.reps} - {exercise.rest || 'sem descanso informado'}</small></span><button className="mini-icon-button" aria-label={`Remover ${exercise.name}`} onClick={() => setDailyExercises((current) => current.filter((_, itemIndex) => itemIndex !== index))} type="button"><Trash2 size={15} /></button></article>)}</div>
+              <button className="primary-button" onClick={saveDailyTemplate} type="button"><Save size={18} /> Salvar treino diario</button>
+            </div>
+          )}
+          <button className="primary-button save-weekly-button" onClick={saveWeeklyPlan} type="button"><Save size={18} /> {canApply ? 'Salvar e aplicar plano' : 'Salvar modelo da plataforma'}</button>
+        </>
+      )}
+      {message ? <p className="form-message neutral-message">{message}</p> : null}
+    </div>
+  )
+}
+
+function DietPlanCreator({ onSaveDiet }: {
   onSaveDiet: (plan: Omit<DietPlan, 'id'>) => Promise<string>
 }) {
   const today = new Date().toISOString().slice(0, 10)
-  const [workout, setWorkout] = useState({ name: '', weekStartDate: today, notes: '' })
   const [diet, setDiet] = useState({ name: '', planDate: today, notes: '' })
   const [message, setMessage] = useState('')
-
-  async function submitWorkout() {
-    if (!workout.name.trim()) return setMessage('Informe o nome do plano de treinamento.')
-    const error = await onSaveWorkout(workout)
-    setMessage(error || 'Plano de treinamento aplicado.')
-    if (!error) setWorkout({ name: '', weekStartDate: today, notes: '' })
-  }
 
   async function submitDiet() {
     if (!diet.name.trim()) return setMessage('Informe o nome do plano de dieta.')
@@ -1492,21 +1785,12 @@ function PlanCreator({
   }
 
   return (
-    <div className="plan-creator-grid">
-      <div className="form-grid compact">
-        <h3>Treinamento semanal</h3>
-        <input aria-label="Nome do plano de treinamento" placeholder="Nome do plano" value={workout.name} onChange={(event) => setWorkout({ ...workout, name: event.target.value })} />
-        <input aria-label="Inicio da semana" type="date" value={workout.weekStartDate} onChange={(event) => setWorkout({ ...workout, weekStartDate: event.target.value })} />
-        <textarea aria-label="Programacao semanal" placeholder="Segunda: inferiores; Terca: superiores..." value={workout.notes} onChange={(event) => setWorkout({ ...workout, notes: event.target.value })} />
-        <button className="primary-button" onClick={submitWorkout} type="button"><Dumbbell size={18} /> Aplicar treinamento</button>
-      </div>
-      <div className="form-grid compact">
-        <h3>Plano de dieta</h3>
-        <input aria-label="Nome do plano de dieta" placeholder="Nome do plano" value={diet.name} onChange={(event) => setDiet({ ...diet, name: event.target.value })} />
-        <input aria-label="Data do plano" type="date" value={diet.planDate} onChange={(event) => setDiet({ ...diet, planDate: event.target.value })} />
-        <textarea aria-label="Orientacoes da dieta" placeholder="Refeicoes, quantidades e orientacoes" value={diet.notes} onChange={(event) => setDiet({ ...diet, notes: event.target.value })} />
-        <button className="primary-button" onClick={submitDiet} type="button"><Apple size={18} /> Aplicar dieta</button>
-      </div>
+    <div className="form-grid compact diet-creator">
+      <h3>Plano de dieta</h3>
+      <input aria-label="Nome do plano de dieta" placeholder="Nome do plano" value={diet.name} onChange={(event) => setDiet({ ...diet, name: event.target.value })} />
+      <input aria-label="Data do plano" type="date" value={diet.planDate} onChange={(event) => setDiet({ ...diet, planDate: event.target.value })} />
+      <textarea aria-label="Orientacoes da dieta" placeholder="Refeicoes, quantidades e orientacoes" value={diet.notes} onChange={(event) => setDiet({ ...diet, notes: event.target.value })} />
+      <button className="primary-button" onClick={submitDiet} type="button"><Apple size={18} /> Aplicar dieta</button>
       {message ? <p className="form-message neutral-message">{message}</p> : null}
     </div>
   )
@@ -1550,12 +1834,16 @@ function StudentFolder({
   assessments,
   bodyGoals,
   workoutPlans,
+  workoutLibrary = blankWorkoutLibrary,
   dietPlans,
   loading,
   canCreatePlans,
   onSaveAssessment,
   onSaveWorkoutPlan,
   onSaveDietPlan,
+  onCreateExercise,
+  onCreateDaily,
+  onCreateWeekly,
 }: {
   activeStudent: Student
   assessment: Assessment
@@ -1563,12 +1851,16 @@ function StudentFolder({
   assessments: Assessment[]
   bodyGoals: BodyGoal[]
   workoutPlans: WorkoutPlan[]
+  workoutLibrary?: WorkoutLibrary
   dietPlans: DietPlan[]
   loading: boolean
   canCreatePlans: boolean
   onSaveAssessment: () => Promise<string>
-  onSaveWorkoutPlan: (plan: Omit<WorkoutPlan, 'id'>) => Promise<string>
+  onSaveWorkoutPlan: (plan: WeeklyPlanInput) => Promise<string>
   onSaveDietPlan: (plan: Omit<DietPlan, 'id'>) => Promise<string>
+  onCreateExercise?: (exercise: Exercise) => Promise<{ exercise: Exercise | null; error: string }>
+  onCreateDaily?: (input: { name: string; description: string; exercises: Array<{ exerciseId: number; sets: string; reps: string; load: LoadLevel; rest: string; notes: string }> }) => Promise<{ template: DailyTemplate | null; error: string }>
+  onCreateWeekly?: (input: { name: string; description: string; days: Array<{ dayOfWeek: string; dailyTemplateId: number | null }> }) => Promise<{ template: WeeklyTemplate | null; error: string }>
 }) {
   if (!activeStudent.id) {
     return <section className="panel full-panel"><p className="empty-state">Nenhum aluno vinculado foi selecionado.</p></section>
@@ -1612,7 +1904,15 @@ function StudentFolder({
           {canCreatePlans ? (
             <section className="panel full-panel" id="treinos">
               <div className="panel-heading"><div><p className="eyebrow">Prescricao</p><h2>Criar e aplicar planos</h2></div></div>
-              <PlanCreator onSaveDiet={onSaveDietPlan} onSaveWorkout={onSaveWorkoutPlan} />
+              <WeeklyPlanBuilder
+                canApply
+                library={workoutLibrary}
+                onApply={onSaveWorkoutPlan}
+                onCreateDaily={onCreateDaily!}
+                onCreateExercise={onCreateExercise!}
+                onCreateWeekly={onCreateWeekly!}
+              />
+              <div className="diet-plan-section"><DietPlanCreator onSaveDiet={onSaveDietPlan} /></div>
             </section>
           ) : null}
 
@@ -1626,6 +1926,60 @@ function StudentFolder({
   )
 }
 
+function StudentWorkoutPlans({ plans, onComplete }: { plans: WorkoutPlan[]; onComplete: (planId: number) => Promise<string> }) {
+  const dayByIndex = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+  const currentDay = dayByIndex[new Date().getDay()]
+  const [view, setView] = useState<'current' | 'history'>('current')
+  const [selectedDay, setSelectedDay] = useState(currentDay)
+  const [message, setMessage] = useState('')
+  const currentPlan = plans.find((plan) => plan.status === 'active')
+  const history = plans.filter((plan) => plan.status === 'completed')
+  const selectedWorkout = currentPlan?.days.find((day) => day.dayOfWeek === selectedDay)
+
+  async function finishPlan() {
+    if (!currentPlan) return
+    const error = await onComplete(currentPlan.id)
+    setMessage(error || 'Plano enviado para o historico.')
+  }
+
+  return (
+    <section className="panel full-panel student-plan-viewer" id="treinos">
+      <div className="segmented-control" aria-label="Planos de treinamento">
+        <button className={view === 'current' ? 'active' : ''} onClick={() => setView('current')} type="button">Plano vigente</button>
+        <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')} type="button">Historico de planos</button>
+      </div>
+
+      {view === 'current' ? currentPlan ? (
+        <>
+          <div className="current-plan-heading"><div><p className="eyebrow">Em andamento</p><h2>{currentPlan.name}</h2><small>Inicio em {new Date(`${currentPlan.weekStartDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></div><button className="secondary-button" onClick={finishPlan} type="button"><CheckCircle2 size={17} /> Concluir plano</button></div>
+          <div className="student-day-tabs">
+            {weekDayOptions.map((day) => {
+              const workout = currentPlan.days.find((item) => item.dayOfWeek === day.key)
+              return <button className={`${selectedDay === day.key ? 'selected ' : ''}${currentDay === day.key ? 'today' : ''}`} key={day.key} onClick={() => setSelectedDay(day.key)} type="button"><span>{day.label}</span><small>{workout?.exercises.length ? `${workout.exercises.length} exercicios` : 'Descanso'}{currentDay === day.key ? ' - Hoje' : ''}</small></button>
+            })}
+          </div>
+          <div className="day-exercise-detail">
+            <div className="record-heading"><div><p className="eyebrow">{weekDayOptions.find((day) => day.key === selectedDay)?.label}</p><h3>{selectedWorkout?.name ?? 'Descanso'}</h3></div><Dumbbell size={19} /></div>
+            {selectedWorkout?.instructions ? <p>{selectedWorkout.instructions}</p> : null}
+            <div className="exercise-table">
+              {selectedWorkout?.exercises.length ? selectedWorkout.exercises.map((exercise, index) => (
+                <article className="exercise-row" key={`${exercise.id}-${index}`}><span className="exercise-order">{index + 1}</span><span><strong>{exercise.name}</strong><small>{exercise.muscle} - {exercise.sets || '-'} series x {exercise.reps || '-'} - descanso {exercise.rest || '-'}</small>{exercise.notes ? <small>{exercise.notes}</small> : null}</span><label className="check-pill"><input type="checkbox" /> Realizado</label></article>
+              )) : <p className="empty-state">Dia de descanso. Nenhum exercicio programado.</p>}
+            </div>
+          </div>
+        </>
+      ) : <p className="empty-state">Nenhum plano vigente. Aguarde a aplicacao de um plano pelo seu personal.</p> : (
+        <div className="executed-plans">
+          {history.length ? history.map((plan) => (
+            <article className="executed-plan" key={plan.id}><CheckCircle2 size={20} /><span><strong>{plan.name}</strong><small>Iniciado em {new Date(`${plan.weekStartDate}T12:00:00`).toLocaleDateString('pt-BR')} - {plan.days.reduce((total, day) => total + day.exercises.length, 0)} exercicios programados</small></span></article>
+          )) : <p className="empty-state">Nenhum plano concluido no historico.</p>}
+        </div>
+      )}
+      {message ? <p className="form-message success-message">{message}</p> : null}
+    </section>
+  )
+}
+
 function StudentArea({
   activeStudent,
   assessment,
@@ -1633,6 +1987,7 @@ function StudentArea({
   assessments,
   bodyGoals,
   workoutPlans,
+  onCompleteWorkoutPlan,
   dietPlans,
   loading,
   onSaveAssessment,
@@ -1645,6 +2000,7 @@ function StudentArea({
   assessments: Assessment[]
   bodyGoals: BodyGoal[]
   workoutPlans: WorkoutPlan[]
+  onCompleteWorkoutPlan: (planId: number) => Promise<string>
   dietPlans: DietPlan[]
   loading: boolean
   onSaveAssessment: () => Promise<string>
@@ -1659,33 +2015,8 @@ function StudentArea({
         <Metric icon={CheckCircle2} label="Treinos feitos" value={`${activeStudent.adherence}%`} detail="Semana atual" />
       </section>
 
-      <section className="content-grid single-column">
-        <Panel eyebrow="Treino diario" title="Executar treino do dia">
-          <div className="exercise-table">
-            {initialExercises.map((exercise) => (
-              <article className="exercise-row" key={exercise.name}>
-                <Dumbbell size={18} />
-                <span>
-                  <strong>{exercise.name}</strong>
-                  <small>{exercise.sets} series - {exercise.reps} repeticoes - descanso {exercise.rest}</small>
-                </span>
-                <label className="check-pill">
-                  <input type="checkbox" />
-                  Realizado
-                </label>
-              </article>
-            ))}
-          </div>
-          <textarea
-            aria-label="Duvidas ou dificuldades"
-            className="standalone-note"
-            placeholder="Duvidas ou dificuldades do treino"
-            value={studentDoubt}
-            onChange={(event) => setStudentDoubt(event.target.value)}
-          />
-        </Panel>
-
-      </section>
+      <StudentWorkoutPlans onComplete={onCompleteWorkoutPlan} plans={workoutPlans} />
+      <textarea aria-label="Duvidas ou dificuldades" className="standalone-note" placeholder="Duvidas ou dificuldades do treino" value={studentDoubt} onChange={(event) => setStudentDoubt(event.target.value)} />
 
       <StudentFolder
         activeStudent={activeStudent}
@@ -1724,11 +2055,19 @@ function AdminArea({
   exercises,
   trainers,
   onLinkStudentTrainer,
+  workoutLibrary,
+  onCreateExercise,
+  onCreateDaily,
+  onCreateWeekly,
 }: {
   students: Student[]
   exercises: Exercise[]
   trainers: Trainer[]
   onLinkStudentTrainer: (studentId: number, trainerId: number) => Promise<string>
+  workoutLibrary: WorkoutLibrary
+  onCreateExercise: (exercise: Exercise) => Promise<{ exercise: Exercise | null; error: string }>
+  onCreateDaily: (input: { name: string; description: string; exercises: Array<{ exerciseId: number; sets: string; reps: string; load: LoadLevel; rest: string; notes: string }> }) => Promise<{ template: DailyTemplate | null; error: string }>
+  onCreateWeekly: (input: { name: string; description: string; days: Array<{ dayOfWeek: string; dailyTemplateId: number | null }> }) => Promise<{ template: WeeklyTemplate | null; error: string }>
 }) {
   const [studentId, setStudentId] = useState('')
   const [trainerId, setTrainerId] = useState('')
@@ -1789,6 +2128,18 @@ function AdminArea({
             ))}
           </div>
         </Panel>
+      </section>
+
+      <section className="panel full-panel">
+        <div className="panel-heading"><div><p className="eyebrow">Biblioteca da plataforma</p><h2>Planos, treinos diarios e exercicios globais</h2></div></div>
+        <WeeklyPlanBuilder
+          canApply={false}
+          library={workoutLibrary}
+          onApply={async () => ''}
+          onCreateDaily={onCreateDaily}
+          onCreateExercise={onCreateExercise}
+          onCreateWeekly={onCreateWeekly}
+        />
       </section>
 
       <section className="panel full-panel">

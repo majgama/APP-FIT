@@ -101,6 +101,8 @@ CREATE TABLE IF NOT EXISTS assessment_photos (
 
 CREATE TABLE IF NOT EXISTS exercises (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_by_user_id INTEGER,
+  visibility TEXT NOT NULL DEFAULT 'platform' CHECK (visibility IN ('platform', 'private')),
   name TEXT NOT NULL,
   muscle_name TEXT NOT NULL,
   video_or_gif_path TEXT,
@@ -111,18 +113,34 @@ CREATE TABLE IF NOT EXISTS exercises (
   rest_text TEXT,
   observation_text TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS workout_templates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_by_user_id INTEGER,
+  visibility TEXT NOT NULL DEFAULT 'platform' CHECK (visibility IN ('platform', 'private')),
   trainer_id INTEGER,
   name TEXT NOT NULL,
   description TEXT,
   template_type TEXT NOT NULL CHECK (template_type IN ('weekly', 'daily')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (trainer_id) REFERENCES trainers(id) ON DELETE SET NULL
+  FOREIGN KEY (trainer_id) REFERENCES trainers(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS weekly_template_days (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  weekly_template_id INTEGER NOT NULL,
+  day_of_week TEXT NOT NULL,
+  daily_template_id INTEGER,
+  day_name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (weekly_template_id) REFERENCES workout_templates(id) ON DELETE CASCADE,
+  FOREIGN KEY (daily_template_id) REFERENCES workout_templates(id) ON DELETE SET NULL,
+  UNIQUE (weekly_template_id, day_of_week)
 );
 
 CREATE TABLE IF NOT EXISTS workout_template_exercises (
@@ -147,6 +165,8 @@ CREATE TABLE IF NOT EXISTS weekly_plans (
   name TEXT NOT NULL,
   week_start_date TEXT NOT NULL,
   notes TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed')),
+  completed_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
@@ -455,6 +475,7 @@ CREATE INDEX IF NOT EXISTS idx_student_trainers_trainer ON student_trainers(trai
 CREATE INDEX IF NOT EXISTS idx_student_trainers_active ON student_trainers(trainer_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_assessments_student_date ON physical_assessments(student_id, assessment_date);
 CREATE INDEX IF NOT EXISTS idx_weekly_plans_student_week ON weekly_plans(student_id, week_start_date);
+CREATE INDEX IF NOT EXISTS idx_weekly_template_days_template ON weekly_template_days(weekly_template_id);
 CREATE INDEX IF NOT EXISTS idx_daily_workouts_weekly_plan ON daily_workouts(weekly_plan_id);
 CREATE INDEX IF NOT EXISTS idx_workout_checkins_student ON workout_checkins(student_id);
 CREATE INDEX IF NOT EXISTS idx_diet_plans_student ON diet_plans(student_id);

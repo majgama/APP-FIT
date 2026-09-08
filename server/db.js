@@ -35,6 +35,33 @@ if (!existingStudentTrainerColumns.includes('inactive_reason')) {
   db.exec('ALTER TABLE student_trainers ADD COLUMN inactive_reason TEXT')
 }
 
+function addMissingColumns(tableName, migrations) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name)
+  for (const [column, statement] of migrations) {
+    if (!columns.includes(column)) db.exec(statement)
+  }
+}
+
+addMissingColumns('exercises', [
+  ['created_by_user_id', 'ALTER TABLE exercises ADD COLUMN created_by_user_id INTEGER'],
+  ['visibility', "ALTER TABLE exercises ADD COLUMN visibility TEXT NOT NULL DEFAULT 'platform'"],
+])
+
+addMissingColumns('workout_templates', [
+  ['created_by_user_id', 'ALTER TABLE workout_templates ADD COLUMN created_by_user_id INTEGER'],
+  ['visibility', "ALTER TABLE workout_templates ADD COLUMN visibility TEXT NOT NULL DEFAULT 'platform'"],
+])
+
+addMissingColumns('weekly_plans', [
+  ['status', "ALTER TABLE weekly_plans ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"],
+  ['completed_at', 'ALTER TABLE weekly_plans ADD COLUMN completed_at TEXT'],
+])
+
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_exercises_visibility_owner ON exercises(visibility, created_by_user_id);
+  CREATE INDEX IF NOT EXISTS idx_workout_templates_visibility_owner ON workout_templates(visibility, created_by_user_id);
+`)
+
 const demoUsers = [
   { name: 'Administrador', email: 'admin@appfit.local', password: '123456', role: 'admin' },
   { name: 'Personal JC', email: 'personal@appfit.local', password: '123456', role: 'personal' },

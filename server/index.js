@@ -163,6 +163,117 @@ function saveAssessmentPhoto(studentId, photo) {
   return { angle, fileName }
 }
 
+const weekDays = [
+  { key: 'monday', label: 'Segunda-feira' },
+  { key: 'tuesday', label: 'Terca-feira' },
+  { key: 'wednesday', label: 'Quarta-feira' },
+  { key: 'thursday', label: 'Quinta-feira' },
+  { key: 'friday', label: 'Sexta-feira' },
+  { key: 'saturday', label: 'Sabado' },
+  { key: 'sunday', label: 'Domingo' },
+]
+
+function libraryVisibility(user, alias = '') {
+  const prefix = alias ? `${alias}.` : ''
+  return {
+    clause: `(${prefix}visibility = 'platform' OR ${prefix}created_by_user_id = ?)`,
+    params: [user.id],
+  }
+}
+
+function getTemplateExercises(templateId) {
+  return db
+    .prepare(
+      `
+      SELECT
+        exercises.id,
+        exercises.name,
+        exercises.muscle_name AS muscle,
+        COALESCE(workout_template_exercises.sets, exercises.default_sets, 0) AS sets,
+        COALESCE(workout_template_exercises.reps, exercises.default_reps, '') AS reps,
+        COALESCE(workout_template_exercises.load, exercises.default_load, 'moderado') AS load,
+        COALESCE(workout_template_exercises.rest_text, exercises.rest_text, '') AS rest,
+        COALESCE(workout_template_exercises.observation_text, exercises.observation_text, '') AS notes,
+        workout_template_exercises.sort_order AS sortOrder
+      FROM workout_template_exercises
+      JOIN exercises ON exercises.id = workout_template_exercises.exercise_id
+      WHERE workout_template_exercises.workout_template_id = ?
+      ORDER BY workout_template_exercises.sort_order, workout_template_exercises.id
+      `,
+    )
+    .all(templateId)
+}
+
+function getVisibleTemplate(user, templateId, templateType) {
+  const visibility = libraryVisibility(user)
+  return db
+    .prepare(`SELECT * FROM workout_templates WHERE id = ? AND template_type = ? AND ${visibility.clause}`)
+    .get(templateId, templateType, ...visibility.params)
+}
+
+function serializeDailyTemplate(template) {
+  return {
+    id: template.id,
+    name: template.name,
+    description: template.description ?? '',
+    visibility: template.visibility,
+    exercises: getTemplateExercises(template.id),
+  }
+}
+
+function getTemplateDays(templateId) {
+  const rows = db
+    .prepare(
+      `
+      SELECT weekly_template_days.day_of_week AS dayOfWeek,
+        weekly_template_days.day_name AS dayName,
+        weekly_template_days.daily_template_id AS dailyTemplateId,
+        workout_templates.name AS workoutName,
+        COALESCE(workout_templates.description, '') AS instructions
+      FROM weekly_template_days
+      LEFT JOIN workout_templates ON workout_templates.id = weekly_template_days.daily_template_id
+      WHERE weekly_template_days.weekly_template_id = ?
+      ORDER BY weekly_template_days.sort_order
+      `,
+    )
+    .all(templateId)
+
+  return rows.map((day) => ({
+    ...day,
+    workoutName: day.workoutName ?? 'Descanso',
+    exercises: day.dailyTemplateId ? getTemplateExercises(day.dailyTemplateId) : [],
+  }))
+}
+
+function getAppliedPlanDays(planId) {
+  const days = db
+    .prepare(
+      `
+      SELECT id, day_of_week AS dayOfWeek, name, COALESCE(instructions, '') AS instructions
+      FROM daily_workouts
+      WHERE weekly_plan_id = ?
+      ORDER BY id
+      `,
+    )
+    .all(planId)
+  const exercises = db.prepare(
+    `
+    SELECT exercises.id, exercises.name, exercises.muscle_name AS muscle,
+      COALESCE(daily_workout_exercises.sets, 0) AS sets,
+      COALESCE(daily_workout_exercises.reps, '') AS reps,
+      COALESCE(daily_workout_exercises.load, 'moderado') AS load,
+      COALESCE(daily_workout_exercises.rest_text, '') AS rest,
+      COALESCE(daily_workout_exercises.observation_text, '') AS notes
+    FROM daily_workout_exercises
+    JOIN exercises ON exercises.id = daily_workout_exercises.exercise_id
+    WHERE daily_workout_exercises.daily_workout_id = ?
+    ORDER BY daily_workout_exercises.sort_order, daily_workout_exercises.id
+    `,
+  )
+
+  return days.map((day) => ({ ...day, exercises: exercises.all(day.id) }))
+}
+
 function requireRole(request, response, allowedRoles) {
   const user = requireUser(request, response)
 
@@ -928,6 +1039,168 @@ app.post('/api/students/:studentId/assessments', (request, response) => {
   response.status(201).json({ id: transaction() })
 })
 
+app.get('/api/workout-library', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const exerciseVisibility = libraryVisibility(user, 'exercises')
+  const templateVisibility = libraryVisibility(user)
+  const exercises = db
+    .prepare(
+      `
+      SELECT id, name, muscle_name AS muscle,
+        COALESCE(video_or_gif_path, '') AS media,
+        COALESCE(audio_path, '') AS audio,
+        COALESCE(CAST(default_sets AS TEXT), '') AS sets,
+        COALESCE(default_reps, '') AS reps,
+        COALESCE(default_load, 'moderado') AS load,
+        COALESCE(rest_text, '') AS rest,
+        COALESCE(observation_text, '') AS notes,
+        visibility
+      FROM exercises
+      WHERE ${exerciseVisibility.clause}
+      ORDER BY visibility DESC, name
+      `,
+    )
+    .all(...exerciseVisibility.params)
+
+  const templates = db
+    .prepare(
+      `SELECT id, name, COALESCE(description, '') AS description, template_type AS templateType, visibility
+       FROM workout_templates WHERE ${templateVisibility.clause} ORDER BY visibility DESC, name`,
+    )
+    .all(...templateVisibility.params)
+  const dailyTemplates = templates
+    .filter((template) => template.templateType === 'daily')
+    .map(serializeDailyTemplate)
+  const weeklyTemplates = templates
+    .filter((template) => template.templateType === 'weekly')
+    .map((template) => ({ ...template, days: getTemplateDays(template.id) }))
+
+  response.json({ exercises, dailyTemplates, weeklyTemplates })
+})
+
+app.post('/api/workout-library/exercises', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const name = String(request.body?.name ?? '').trim()
+  const muscle = String(request.body?.muscle ?? '').trim()
+  const sets = Number(request.body?.sets ?? 0)
+  const reps = String(request.body?.reps ?? '').trim()
+  const load = String(request.body?.load ?? 'moderado')
+  const rest = String(request.body?.rest ?? '').trim()
+  const notes = String(request.body?.notes ?? '').trim()
+  const media = String(request.body?.media ?? '').trim()
+  const audio = String(request.body?.audio ?? '').trim()
+
+  if (!name || !muscle) {
+    response.status(400).json({ message: 'Informe o nome e o grupo muscular.' })
+    return
+  }
+
+  const visibility = user.role === 'admin' ? 'platform' : 'private'
+  const result = db.prepare(
+    `INSERT INTO exercises (
+      created_by_user_id, visibility, name, muscle_name, video_or_gif_path, audio_path,
+      default_sets, default_reps, default_load, rest_text, observation_text
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(user.id, visibility, name, muscle, media, audio, sets || null, reps, load, rest, notes)
+
+  response.status(201).json({ exercise: { id: result.lastInsertRowid, name, muscle, sets: String(sets || ''), reps, load, rest, notes, media, audio, visibility } })
+})
+
+app.post('/api/workout-library/daily-templates', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const name = String(request.body?.name ?? '').trim()
+  const description = String(request.body?.description ?? '').trim()
+  const exercises = Array.isArray(request.body?.exercises) ? request.body.exercises : []
+  if (!name) {
+    response.status(400).json({ message: 'Informe o nome do treino diario.' })
+    return
+  }
+
+  for (const item of exercises) {
+    const visibility = libraryVisibility(user)
+    const exercise = db.prepare(`SELECT id FROM exercises WHERE id = ? AND ${visibility.clause}`).get(Number(item.exerciseId), ...visibility.params)
+    if (!exercise) {
+      response.status(403).json({ message: 'Um dos exercicios nao esta disponivel para este usuario.' })
+      return
+    }
+  }
+
+  const trainer = user.role === 'personal' ? ensureTrainerForUser(user.id) : null
+  const visibility = user.role === 'admin' ? 'platform' : 'private'
+  const transaction = db.transaction(() => {
+    const result = db.prepare(
+      `INSERT INTO workout_templates (created_by_user_id, visibility, trainer_id, name, description, template_type)
+       VALUES (?, ?, ?, ?, ?, 'daily')`,
+    ).run(user.id, visibility, trainer?.id ?? null, name, description)
+    const insertExercise = db.prepare(
+      `INSERT INTO workout_template_exercises
+       (workout_template_id, exercise_id, sort_order, sets, reps, load, rest_text, observation_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    exercises.forEach((item, index) => insertExercise.run(
+      result.lastInsertRowid,
+      Number(item.exerciseId),
+      index,
+      Number(item.sets) || null,
+      String(item.reps ?? ''),
+      String(item.load ?? 'moderado'),
+      String(item.rest ?? ''),
+      String(item.notes ?? ''),
+    ))
+    return result.lastInsertRowid
+  })
+
+  response.status(201).json({ id: transaction() })
+})
+
+app.post('/api/workout-library/weekly-templates', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const name = String(request.body?.name ?? '').trim()
+  const description = String(request.body?.description ?? '').trim()
+  const submittedDays = Array.isArray(request.body?.days) ? request.body.days : []
+  if (!name) {
+    response.status(400).json({ message: 'Informe o nome do plano semanal.' })
+    return
+  }
+
+  const normalizedDays = weekDays.map((day) => {
+    const submitted = submittedDays.find((item) => item.dayOfWeek === day.key)
+    return { ...day, dailyTemplateId: Number(submitted?.dailyTemplateId) || null }
+  })
+
+  for (const day of normalizedDays.filter((item) => item.dailyTemplateId)) {
+    if (!getVisibleTemplate(user, day.dailyTemplateId, 'daily')) {
+      response.status(403).json({ message: `Treino indisponivel para ${day.label}.` })
+      return
+    }
+  }
+
+  const trainer = user.role === 'personal' ? ensureTrainerForUser(user.id) : null
+  const visibility = user.role === 'admin' ? 'platform' : 'private'
+  const transaction = db.transaction(() => {
+    const result = db.prepare(
+      `INSERT INTO workout_templates (created_by_user_id, visibility, trainer_id, name, description, template_type)
+       VALUES (?, ?, ?, ?, ?, 'weekly')`,
+    ).run(user.id, visibility, trainer?.id ?? null, name, description)
+    const insertDay = db.prepare(
+      `INSERT INTO weekly_template_days (weekly_template_id, day_of_week, daily_template_id, day_name, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    normalizedDays.forEach((day, index) => insertDay.run(result.lastInsertRowid, day.key, day.dailyTemplateId, day.label, index))
+    return result.lastInsertRowid
+  })
+
+  response.status(201).json({ id: transaction() })
+})
+
 app.get('/api/students/:studentId/plans', (request, response) => {
   const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
   if (!user) return
@@ -942,7 +1215,8 @@ app.get('/api/students/:studentId/plans', (request, response) => {
   const workouts = db
     .prepare(
       `
-      SELECT id, name, week_start_date AS weekStartDate, COALESCE(notes, '') AS notes, created_at AS createdAt
+      SELECT id, name, week_start_date AS weekStartDate, COALESCE(notes, '') AS notes,
+        status, completed_at AS completedAt, created_at AS createdAt
       FROM weekly_plans
       WHERE student_id = ?
       ORDER BY week_start_date DESC, id DESC
@@ -961,7 +1235,10 @@ app.get('/api/students/:studentId/plans', (request, response) => {
     )
     .all(studentId)
 
-  response.json({ workouts, diets })
+  response.json({
+    workouts: workouts.map((plan) => ({ ...plan, days: getAppliedPlanDays(plan.id) })),
+    diets,
+  })
 })
 
 app.post('/api/students/:studentId/workout-plans', (request, response) => {
@@ -976,25 +1253,72 @@ app.post('/api/students/:studentId/workout-plans', (request, response) => {
   }
 
   const trainer = getStudentTrainer(user, studentId)
-  const name = String(request.body?.name ?? '').trim()
+  const templateId = Number(request.body?.templateId) || null
+  const template = templateId ? getVisibleTemplate(user, templateId, 'weekly') : null
+  const name = String(request.body?.name ?? template?.name ?? '').trim()
   const weekStartDate = String(request.body?.weekStartDate ?? new Date().toISOString().slice(0, 10)).trim()
-  const notes = String(request.body?.notes ?? '').trim()
+  const notes = String(request.body?.notes ?? template?.description ?? '').trim()
 
   if (!name) {
     response.status(400).json({ message: 'Informe o nome do plano de treinamento.' })
     return
   }
 
-  const result = db
-    .prepare(
-      `
-      INSERT INTO weekly_plans (student_id, trainer_id, name, week_start_date, notes)
-      VALUES (?, ?, ?, ?, ?)
-      `,
-    )
-    .run(studentId, trainer?.id ?? null, name, weekStartDate, notes)
+  if (templateId && !template) {
+    response.status(403).json({ message: 'Este modelo de plano nao esta disponivel.' })
+    return
+  }
 
-  response.status(201).json({ plan: { id: result.lastInsertRowid, name, weekStartDate, notes } })
+  const days = template ? getTemplateDays(template.id) : weekDays.map((day) => ({ ...day, workoutName: 'Descanso', instructions: '', dailyTemplateId: null, exercises: [] }))
+  const transaction = db.transaction(() => {
+    db.prepare("UPDATE weekly_plans SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE student_id = ? AND status = 'active'").run(studentId)
+    const result = db.prepare(
+      `INSERT INTO weekly_plans (student_id, trainer_id, workout_template_id, name, week_start_date, notes, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'active')`,
+    ).run(studentId, trainer?.id ?? null, templateId, name, weekStartDate, notes)
+    const insertDay = db.prepare(
+      `INSERT INTO daily_workouts (weekly_plan_id, workout_template_id, day_of_week, name, instructions)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    const insertExercise = db.prepare(
+      `INSERT INTO daily_workout_exercises
+       (daily_workout_id, exercise_id, sort_order, sets, reps, load, rest_text, observation_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+
+    days.forEach((day) => {
+      const daily = insertDay.run(result.lastInsertRowid, day.dailyTemplateId, day.dayOfWeek ?? day.key, day.workoutName, day.instructions)
+      day.exercises.forEach((exercise, index) => insertExercise.run(
+        daily.lastInsertRowid,
+        exercise.id,
+        index,
+        Number(exercise.sets) || null,
+        String(exercise.reps ?? ''),
+        String(exercise.load ?? 'moderado'),
+        String(exercise.rest ?? ''),
+        String(exercise.notes ?? ''),
+      ))
+    })
+    return result.lastInsertRowid
+  })
+
+  const planId = transaction()
+  response.status(201).json({ plan: { id: planId, name, weekStartDate, notes, status: 'active', days: getAppliedPlanDays(planId) } })
+})
+
+app.patch('/api/workout-plans/:planId/complete', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+  if (!user) return
+
+  const planId = Number(request.params.planId)
+  const plan = db.prepare('SELECT id, student_id AS studentId FROM weekly_plans WHERE id = ?').get(planId)
+  if (!plan || !canAccessStudent(user, plan.studentId, false)) {
+    response.status(403).json({ message: 'Sem acesso a este plano.' })
+    return
+  }
+
+  db.prepare("UPDATE weekly_plans SET status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(planId)
+  response.json({ ok: true })
 })
 
 app.post('/api/students/:studentId/diet-plans', (request, response) => {
@@ -1034,6 +1358,10 @@ app.get('/api/exercises', (request, response) => {
   const user = requireUser(request, response)
   if (!user) return
 
+  const visibility = user.role === 'aluno'
+    ? { clause: "exercises.visibility = 'platform'", params: [] }
+    : libraryVisibility(user, 'exercises')
+
   const exercises = db
     .prepare(
       `
@@ -1047,12 +1375,14 @@ app.get('/api/exercises', (request, response) => {
         COALESCE(default_reps, '') AS reps,
         COALESCE(default_load, 'moderado') AS load,
         COALESCE(rest_text, '') AS rest,
-        COALESCE(observation_text, '') AS notes
+        COALESCE(observation_text, '') AS notes,
+        visibility
       FROM exercises
+      WHERE ${visibility.clause}
       ORDER BY name
       `,
     )
-    .all()
+    .all(...visibility.params)
 
   response.json({ exercises })
 })
@@ -1081,10 +1411,13 @@ app.post('/api/exercises', (request, response) => {
     return
   }
 
+  const visibility = user.role === 'admin' ? 'platform' : 'private'
   const result = db
     .prepare(
       `
       INSERT INTO exercises (
+        created_by_user_id,
+        visibility,
         name,
         muscle_name,
         video_or_gif_path,
@@ -1095,10 +1428,10 @@ app.post('/api/exercises', (request, response) => {
         rest_text,
         observation_text
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
-    .run(name, muscle, media, audio, sets || null, reps, load, rest, notes)
+    .run(user.id, visibility, name, muscle, media, audio, sets || null, reps, load, rest, notes)
 
   response.status(201).json({
     exercise: {
@@ -1112,6 +1445,7 @@ app.post('/api/exercises', (request, response) => {
       load,
       rest,
       notes,
+      visibility,
     },
   })
 })
