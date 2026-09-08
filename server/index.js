@@ -1,12 +1,20 @@
 import bcrypt from 'bcryptjs'
 import express from 'express'
 import { createHash, randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { db, toPublicUser } from './db.js'
 
 const app = express()
 const port = Number(process.env.PORT ?? 3000)
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const rootDir = join(__dirname, '..')
+const uploadDir = join(rootDir, 'data', 'uploads')
 
-app.use(express.json())
+mkdirSync(uploadDir, { recursive: true })
+
+app.use(express.json({ limit: '25mb' }))
 
 function hashToken(token) {
   return createHash('sha256').update(token).digest('hex')
@@ -81,6 +89,78 @@ function ensureTrainerForUser(userId) {
     'Assessoria fitness online',
   )
   return getTrainerByUserId(userId)
+}
+
+function canAccessStudent(user, studentId, includeInactive = true) {
+  if (user.role === 'admin') return true
+
+  if (user.role === 'aluno') {
+    const student = db.prepare('SELECT id FROM students WHERE id = ? AND user_id = ?').get(studentId, user.id)
+    return Boolean(student)
+  }
+
+  if (user.role === 'personal') {
+    const trainer = getTrainerByUserId(user.id)
+    if (!trainer) return false
+
+    const activeClause = includeInactive ? '' : 'AND is_active = 1 AND ended_at IS NULL'
+    const link = db
+      .prepare(
+        `SELECT id FROM student_trainers WHERE student_id = ? AND trainer_id = ? ${activeClause}`,
+      )
+      .get(studentId, trainer.id)
+
+    return Boolean(link)
+  }
+
+  return false
+}
+
+function getStudentTrainer(user, studentId) {
+  if (user.role === 'admin') return null
+  if (user.role !== 'personal') return null
+
+  const trainer = getTrainerByUserId(user.id)
+  if (!trainer) return null
+
+  const link = db
+    .prepare(
+      `
+      SELECT trainers.id
+      FROM trainers
+      JOIN student_trainers ON student_trainers.trainer_id = trainers.id
+      WHERE student_trainers.student_id = ?
+        AND trainers.id = ?
+        AND student_trainers.is_active = 1
+        AND student_trainers.ended_at IS NULL
+      `,
+    )
+    .get(studentId, trainer.id)
+
+  return link ?? null
+}
+
+function saveAssessmentPhoto(studentId, photo) {
+  const dataUrl = String(photo?.dataUrl ?? '')
+  const angle = String(photo?.angle ?? 'front')
+
+  if (!['front', 'side', 'back'].includes(angle)) return null
+  if (!dataUrl.startsWith('data:image/')) return null
+
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/)
+  if (!match) return null
+
+  const mimeType = match[1]
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) return null
+
+  const fileBuffer = Buffer.from(match[2], 'base64')
+  if (!fileBuffer.length || fileBuffer.length > 6 * 1024 * 1024) return null
+
+  const extension = mimeType.includes('png') ? '.png' : mimeType.includes('webp') ? '.webp' : '.jpg'
+  const fileName = `assessment-${studentId}-${Date.now()}-${randomBytes(4).toString('hex')}${extension}`
+  writeFileSync(join(uploadDir, fileName), fileBuffer)
+
+  return { angle, fileName }
 }
 
 function requireRole(request, response, allowedRoles) {
@@ -360,6 +440,38 @@ app.post('/api/invitations/student', (request, response) => {
   response.status(201).json({ invitation })
 })
 
+app.get('/api/students/me', (request, response) => {
+  const user = requireRole(request, response, ['aluno'])
+  if (!user) return
+
+  const student = db
+    .prepare(
+      `
+      SELECT
+        students.id,
+        students.name,
+        COALESCE(students.goal, '') AS goal,
+        COALESCE(students.start_date, '') AS start,
+        COALESCE(students.restrictions, '') AS restrictions,
+        students.status AS linkStatus,
+        0 AS adherence,
+        'Agendar' AS nextReview,
+        COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers
+      FROM students
+      LEFT JOIN student_trainers ON student_trainers.student_id = students.id
+        AND student_trainers.is_active = 1
+        AND student_trainers.ended_at IS NULL
+      LEFT JOIN trainers ON trainers.id = student_trainers.trainer_id
+      LEFT JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
+      WHERE students.user_id = ?
+      GROUP BY students.id
+      `,
+    )
+    .get(user.id)
+
+  response.json({ student: student ?? null })
+})
+
 app.get('/api/students', (request, response) => {
   const user = requireRole(request, response, ['admin', 'personal'])
   if (!user) return
@@ -632,6 +744,290 @@ app.delete('/api/students/:studentId/trainers/:trainerId', (request, response) =
   ).run(studentId, trainerId)
 
   response.json({ ok: true })
+})
+
+app.get('/api/body-goals', (_request, response) => {
+  response.json({
+    goals: [
+      { name: 'Homem A', url: '/body-goals/homem%20%20A.png' },
+      { name: 'Homem B', url: '/body-goals/homem%20B.png' },
+      { name: 'Homem C', url: '/body-goals/homem%20C.png' },
+      { name: 'Mulher A', url: '/body-goals/mulher%20A.png' },
+      { name: 'Mulher B', url: '/body-goals/mulher%20B.png' },
+      { name: 'Mulher C', url: '/body-goals/mulher%20C.png' },
+    ],
+  })
+})
+
+app.get('/api/assessment-photos/:photoId', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+  if (!user) return
+
+  const photoId = Number(request.params.photoId)
+  const photo = db
+    .prepare(
+      `
+      SELECT assessment_photos.file_path AS fileName, physical_assessments.student_id AS studentId
+      FROM assessment_photos
+      JOIN physical_assessments ON physical_assessments.id = assessment_photos.assessment_id
+      WHERE assessment_photos.id = ?
+      `,
+    )
+    .get(photoId)
+
+  if (!photo || !canAccessStudent(user, photo.studentId)) {
+    response.status(404).json({ message: 'Foto nao encontrada.' })
+    return
+  }
+
+  const filePath = join(uploadDir, photo.fileName)
+  if (!existsSync(filePath)) {
+    response.status(404).json({ message: 'Arquivo nao encontrado.' })
+    return
+  }
+
+  response.sendFile(filePath)
+})
+
+app.get('/api/students/:studentId/assessments', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+  if (!user) return
+
+  const studentId = Number(request.params.studentId)
+
+  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId)) {
+    response.status(403).json({ message: 'Sem acesso a este aluno.' })
+    return
+  }
+
+  const assessments = db
+    .prepare(
+      `
+      SELECT
+        id,
+        assessment_date AS date,
+        COALESCE(weight_kg, '') AS weight,
+        COALESCE(height_cm, '') AS height,
+        COALESCE(chest_cm, '') AS chest,
+        COALESCE(waist_cm, '') AS waist,
+        COALESCE(abdomen_cm, '') AS abdomen,
+        COALESCE(hip_cm, '') AS hip,
+        COALESCE(right_arm_cm, '') AS rightArm,
+        COALESCE(left_arm_cm, '') AS leftArm,
+        COALESCE(right_thigh_cm, '') AS rightThigh,
+        COALESCE(left_thigh_cm, '') AS leftThigh,
+        COALESCE(right_calf_cm, '') AS rightCalf,
+        COALESCE(left_calf_cm, '') AS leftCalf,
+        COALESCE(body_model_target, '') AS targetBody,
+        COALESCE(notes, '') AS notes
+      FROM physical_assessments
+      WHERE student_id = ?
+      ORDER BY assessment_date DESC, id DESC
+      `,
+    )
+    .all(studentId)
+
+  const photos = db.prepare('SELECT id, angle, file_path AS fileName FROM assessment_photos WHERE assessment_id = ?')
+
+  function photoToPayload(photo) {
+    const filePath = join(uploadDir, photo.fileName)
+    if (!existsSync(filePath)) return { id: photo.id, angle: photo.angle, dataUrl: '' }
+
+    const extension = photo.fileName.toLowerCase().endsWith('.png')
+      ? 'image/png'
+      : photo.fileName.toLowerCase().endsWith('.webp')
+        ? 'image/webp'
+        : 'image/jpeg'
+
+    return {
+      id: photo.id,
+      angle: photo.angle,
+      dataUrl: `data:${extension};base64,${readFileSync(filePath).toString('base64')}`,
+    }
+  }
+
+  response.json({
+    assessments: assessments.map((assessment) => ({
+      ...assessment,
+      photos: photos.all(assessment.id).map(photoToPayload),
+    })),
+  })
+})
+
+app.post('/api/students/:studentId/assessments', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+  if (!user) return
+
+  const studentId = Number(request.params.studentId)
+
+  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId, false)) {
+    response.status(403).json({ message: 'Sem acesso a este aluno ativo.' })
+    return
+  }
+
+  const trainer = getStudentTrainer(user, studentId)
+  const body = request.body ?? {}
+  const date = String(body.date ?? new Date().toISOString().slice(0, 10))
+  const photos = Array.isArray(body.photos) ? body.photos : []
+
+  const transaction = db.transaction(() => {
+    const result = db
+      .prepare(
+        `
+        INSERT INTO physical_assessments (
+          student_id,
+          trainer_id,
+          assessment_date,
+          weight_kg,
+          height_cm,
+          chest_cm,
+          waist_cm,
+          abdomen_cm,
+          hip_cm,
+          right_arm_cm,
+          left_arm_cm,
+          right_thigh_cm,
+          left_thigh_cm,
+          right_calf_cm,
+          left_calf_cm,
+          body_model_target,
+          notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        studentId,
+        trainer?.id ?? null,
+        date,
+        Number(body.weight) || null,
+        Number(body.height) || null,
+        Number(body.chest) || null,
+        Number(body.waist) || null,
+        Number(body.abdomen) || null,
+        Number(body.hip) || null,
+        Number(body.rightArm) || null,
+        Number(body.leftArm) || null,
+        Number(body.rightThigh) || null,
+        Number(body.leftThigh) || null,
+        Number(body.rightCalf) || null,
+        Number(body.leftCalf) || null,
+        String(body.targetBody ?? ''),
+        String(body.notes ?? ''),
+      )
+
+    const insertPhoto = db.prepare('INSERT INTO assessment_photos (assessment_id, angle, file_path) VALUES (?, ?, ?)')
+
+    for (const photo of photos) {
+      const saved = saveAssessmentPhoto(studentId, photo)
+      if (saved) insertPhoto.run(result.lastInsertRowid, saved.angle, saved.fileName)
+    }
+
+    return result.lastInsertRowid
+  })
+
+  response.status(201).json({ id: transaction() })
+})
+
+app.get('/api/students/:studentId/plans', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+  if (!user) return
+
+  const studentId = Number(request.params.studentId)
+
+  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId)) {
+    response.status(403).json({ message: 'Sem acesso a este aluno.' })
+    return
+  }
+
+  const workouts = db
+    .prepare(
+      `
+      SELECT id, name, week_start_date AS weekStartDate, COALESCE(notes, '') AS notes, created_at AS createdAt
+      FROM weekly_plans
+      WHERE student_id = ?
+      ORDER BY week_start_date DESC, id DESC
+      `,
+    )
+    .all(studentId)
+
+  const diets = db
+    .prepare(
+      `
+      SELECT id, name, COALESCE(plan_date, week_start_date, '') AS planDate, COALESCE(notes, '') AS notes, created_at AS createdAt
+      FROM diet_plans
+      WHERE student_id = ?
+      ORDER BY COALESCE(plan_date, week_start_date, created_at) DESC, id DESC
+      `,
+    )
+    .all(studentId)
+
+  response.json({ workouts, diets })
+})
+
+app.post('/api/students/:studentId/workout-plans', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const studentId = Number(request.params.studentId)
+
+  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId, false)) {
+    response.status(403).json({ message: 'Sem acesso a este aluno ativo.' })
+    return
+  }
+
+  const trainer = getStudentTrainer(user, studentId)
+  const name = String(request.body?.name ?? '').trim()
+  const weekStartDate = String(request.body?.weekStartDate ?? new Date().toISOString().slice(0, 10)).trim()
+  const notes = String(request.body?.notes ?? '').trim()
+
+  if (!name) {
+    response.status(400).json({ message: 'Informe o nome do plano de treinamento.' })
+    return
+  }
+
+  const result = db
+    .prepare(
+      `
+      INSERT INTO weekly_plans (student_id, trainer_id, name, week_start_date, notes)
+      VALUES (?, ?, ?, ?, ?)
+      `,
+    )
+    .run(studentId, trainer?.id ?? null, name, weekStartDate, notes)
+
+  response.status(201).json({ plan: { id: result.lastInsertRowid, name, weekStartDate, notes } })
+})
+
+app.post('/api/students/:studentId/diet-plans', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal'])
+  if (!user) return
+
+  const studentId = Number(request.params.studentId)
+
+  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId, false)) {
+    response.status(403).json({ message: 'Sem acesso a este aluno ativo.' })
+    return
+  }
+
+  const trainer = getStudentTrainer(user, studentId)
+  const name = String(request.body?.name ?? '').trim()
+  const planDate = String(request.body?.planDate ?? new Date().toISOString().slice(0, 10)).trim()
+  const notes = String(request.body?.notes ?? '').trim()
+
+  if (!name) {
+    response.status(400).json({ message: 'Informe o nome do plano de dieta.' })
+    return
+  }
+
+  const result = db
+    .prepare(
+      `
+      INSERT INTO diet_plans (student_id, trainer_id, name, plan_date, notes)
+      VALUES (?, ?, ?, ?, ?)
+      `,
+    )
+    .run(studentId, trainer?.id ?? null, name, planDate, notes)
+
+  response.status(201).json({ plan: { id: result.lastInsertRowid, name, planDate, notes } })
 })
 
 app.get('/api/exercises', (request, response) => {

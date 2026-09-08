@@ -10,6 +10,7 @@ import {
   ClipboardList,
   Dumbbell,
   FilePlus2,
+  FolderOpen,
   HeartPulse,
   Link2,
   KeyRound,
@@ -22,6 +23,7 @@ import {
   Play,
   Plus,
   Power,
+  Save,
   ShieldCheck,
   UserPlus,
   UserCog,
@@ -98,22 +100,51 @@ type GeneratedInvite = {
   url: string
   expiresAt: string
 }
-type Meal = {
-  name: string
-  amount: string
-  photo: string
-  guidance: string
-}
-
 type Assessment = {
+  id?: number
   date: string
   weight: string
   height: string
+  chest: string
   waist: string
   abdomen: string
   hip: string
-  currentBody: string
+  rightArm: string
+  leftArm: string
+  rightThigh: string
+  leftThigh: string
+  rightCalf: string
+  leftCalf: string
   targetBody: string
+  notes: string
+  photos: AssessmentPhoto[]
+}
+
+type AssessmentPhoto = {
+  id?: number
+  angle: 'front' | 'side' | 'back'
+  dataUrl: string
+}
+
+type BodyGoal = {
+  name: string
+  url: string
+}
+
+type WorkoutPlan = {
+  id: number
+  name: string
+  weekStartDate: string
+  notes: string
+  createdAt?: string
+}
+
+type DietPlan = {
+  id: number
+  name: string
+  planDate: string
+  notes: string
+  createdAt?: string
 }
 
 const initialStudents: Student[] = [
@@ -166,18 +197,6 @@ const initialExercises: Exercise[] = [
     rest: '75 segundos',
     notes: 'Evitar elevacao dos ombros no final do movimento.',
   },
-]
-
-const meals: Meal[] = [
-  { name: 'Cafe da manha', amount: '1 prato', photo: 'foto-refeicao.jpg', guidance: 'Proteina + carboidrato de digestao lenta.' },
-  { name: 'Lanche', amount: '1 porcao', photo: 'lanche.jpg', guidance: 'Opcao pratica para manter energia.' },
-  { name: 'Almoco', amount: '450 g', photo: 'almoco.jpg', guidance: 'Priorizar vegetais, proteina magra e arroz/batata.' },
-  { name: 'Lanche da tarde', amount: '1 porcao', photo: 'tarde.jpg', guidance: 'Ajustar conforme horario do treino.' },
-  { name: 'Janta', amount: '400 g', photo: 'janta.jpg', guidance: 'Refeicao leve com boa saciedade.' },
-  { name: 'Ceia', amount: 'Opcional', photo: 'ceia.jpg', guidance: 'Usar quando houver fome antes de dormir.' },
-  { name: 'Pre-treino', amount: '30 a 60 min antes', photo: 'pre.jpg', guidance: 'Carboidrato simples se o treino for intenso.' },
-  { name: 'Pos-treino', amount: 'Apos treino', photo: 'pos.jpg', guidance: 'Proteina e carboidrato conforme meta.' },
-  { name: 'Suplementacao', amount: 'Conforme plano', photo: 'suplemento.jpg', guidance: 'Registrar dose, horario e observacoes.' },
 ]
 
 const weeklyPlan = [
@@ -237,11 +256,19 @@ const blankAssessment: Assessment = {
   date: '',
   weight: '',
   height: '',
+  chest: '',
   waist: '',
   abdomen: '',
   hip: '',
-  currentBody: 'Modelo 1',
-  targetBody: 'Objetivo 1',
+  rightArm: '',
+  leftArm: '',
+  rightThigh: '',
+  leftThigh: '',
+  rightCalf: '',
+  leftCalf: '',
+  targetBody: '',
+  notes: '',
+  photos: [],
 }
 
 function App() {
@@ -258,6 +285,11 @@ function App() {
   const [exerciseCatalog, setExerciseCatalog] = useState(initialExercises)
   const [trainers, setTrainers] = useState<Trainer[]>([])
   const [assessment, setAssessment] = useState(blankAssessment)
+  const [assessments, setAssessments] = useState<Assessment[]>([])
+  const [bodyGoals, setBodyGoals] = useState<BodyGoal[]>([])
+  const [workoutPlans, setWorkoutPlans] = useState<WorkoutPlan[]>([])
+  const [dietPlans, setDietPlans] = useState<DietPlan[]>([])
+  const [folderLoading, setFolderLoading] = useState(false)
   const [studentDoubt, setStudentDoubt] = useState('')
   const [invitationToken, setInvitationToken] = useState('')
   const [studentInvitation, setStudentInvitation] = useState<StudentInvitation | null>(null)
@@ -320,6 +352,13 @@ function App() {
         } else {
           setInactiveStudents([])
         }
+      } else if (role === 'aluno') {
+        const studentData = await apiRequest('/api/students/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const ownStudent = studentData.student as Student | null
+        setStudents(ownStudent ? [ownStudent] : [])
+        setSelectedStudent(ownStudent?.name ?? '')
       }
     } catch (error) {
       console.error(error)
@@ -363,6 +402,30 @@ function App() {
       .catch(() => localStorage.removeItem('app-fit-auth-token'))
       .finally(() => setIsAuthLoading(false))
   }, [])
+
+  useEffect(() => {
+    if (!currentUser || !activeStudent.id) {
+      setAssessments([])
+      setWorkoutPlans([])
+      setDietPlans([])
+      return
+    }
+
+    setFolderLoading(true)
+    Promise.all([
+      apiRequest(`/api/students/${activeStudent.id}/assessments`),
+      apiRequest(`/api/students/${activeStudent.id}/plans`),
+      apiRequest('/api/body-goals'),
+    ])
+      .then(([assessmentData, planData, goalData]) => {
+        setAssessments(assessmentData.assessments as Assessment[])
+        setWorkoutPlans(planData.workouts as WorkoutPlan[])
+        setDietPlans(planData.diets as DietPlan[])
+        setBodyGoals(goalData.goals as BodyGoal[])
+      })
+      .catch((error) => console.error(error))
+      .finally(() => setFolderLoading(false))
+  }, [activeStudent.id, currentUser])
 
   async function login(email: string, password: string) {
     const response = await fetch('/api/auth/login', {
@@ -463,6 +526,60 @@ function App() {
       .catch((error) => error.message)
   }
 
+  async function refreshStudentFolder(studentId: number) {
+    const [assessmentData, planData] = await Promise.all([
+      apiRequest(`/api/students/${studentId}/assessments`),
+      apiRequest(`/api/students/${studentId}/plans`),
+    ])
+    setAssessments(assessmentData.assessments as Assessment[])
+    setWorkoutPlans(planData.workouts as WorkoutPlan[])
+    setDietPlans(planData.diets as DietPlan[])
+  }
+
+  async function saveAssessment() {
+    if (!activeStudent.id) return 'Selecione um aluno vinculado.'
+    if (!assessment.date) return 'Informe a data da avaliacao.'
+
+    return apiRequest(`/api/students/${activeStudent.id}/assessments`, {
+      method: 'POST',
+      body: JSON.stringify(assessment),
+    })
+      .then(async () => {
+        setAssessment(blankAssessment)
+        await refreshStudentFolder(activeStudent.id!)
+        return ''
+      })
+      .catch((error) => error.message)
+  }
+
+  async function saveWorkoutPlan(plan: Omit<WorkoutPlan, 'id'>) {
+    if (!activeStudent.id) return 'Selecione um aluno vinculado.'
+
+    return apiRequest(`/api/students/${activeStudent.id}/workout-plans`, {
+      method: 'POST',
+      body: JSON.stringify(plan),
+    })
+      .then(async () => {
+        await refreshStudentFolder(activeStudent.id!)
+        return ''
+      })
+      .catch((error) => error.message)
+  }
+
+  async function saveDietPlan(plan: Omit<DietPlan, 'id'>) {
+    if (!activeStudent.id) return 'Selecione um aluno vinculado.'
+
+    return apiRequest(`/api/students/${activeStudent.id}/diet-plans`, {
+      method: 'POST',
+      body: JSON.stringify(plan),
+    })
+      .then(async () => {
+        await refreshStudentFolder(activeStudent.id!)
+        return ''
+      })
+      .catch((error) => error.message)
+  }
+
   async function linkStudentToTrainer(studentId: number, trainerId: number) {
     if (!currentUser || currentUser.role !== 'admin') return 'Somente admin pode vincular alunos e personais.'
 
@@ -476,6 +593,11 @@ function App() {
         return ''
       })
       .catch((error) => error.message)
+  }
+
+  function openStudentFolder(studentName: string) {
+    setSelectedStudent(studentName)
+    window.setTimeout(() => document.getElementById('avaliacoes')?.scrollIntoView({ behavior: 'smooth' }), 0)
   }
 
   function logout() {
@@ -633,11 +755,15 @@ function App() {
               <Panel id="alunos" eyebrow="Personal" title="Lista de alunos">
                 <div className="student-list">
                   {students.map((student) => (
-                    <button
+                    <div
                       className={student.name === activeStudent.name ? 'student-row active' : 'student-row'}
                       key={student.name}
-                      onClick={() => setSelectedStudent(student.name)}
-                      type="button"
+                      onClick={() => openStudentFolder(student.name)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') openStudentFolder(student.name)
+                      }}
+                      role="button"
+                      tabIndex={0}
                     >
                       <span>
                         <strong>{student.name}</strong>
@@ -659,7 +785,7 @@ function App() {
                           </button>
                         ) : null}
                       </span>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </Panel>
@@ -735,10 +861,19 @@ function App() {
               </Panel>
             </section>
 
-            <DietsAndAssessments
+            <StudentFolder
               activeStudent={activeStudent}
               assessment={assessment}
               setAssessment={setAssessment}
+              assessments={assessments}
+              bodyGoals={bodyGoals}
+              workoutPlans={workoutPlans}
+              dietPlans={dietPlans}
+              loading={folderLoading}
+              canCreatePlans
+              onSaveAssessment={saveAssessment}
+              onSaveWorkoutPlan={saveWorkoutPlan}
+              onSaveDietPlan={saveDietPlan}
             />
           </>
         ) : null}
@@ -748,6 +883,12 @@ function App() {
             activeStudent={activeStudent}
             assessment={assessment}
             setAssessment={setAssessment}
+            assessments={assessments}
+            bodyGoals={bodyGoals}
+            workoutPlans={workoutPlans}
+            dietPlans={dietPlans}
+            loading={folderLoading}
+            onSaveAssessment={saveAssessment}
             studentDoubt={studentDoubt}
             setStudentDoubt={setStudentDoubt}
           />
@@ -1083,71 +1224,316 @@ function ExerciseForm({
   )
 }
 
-function DietsAndAssessments({
+function AssessmentForm({
+  assessment,
+  setAssessment,
+  bodyGoals,
+  onSave,
+}: {
+  assessment: Assessment
+  setAssessment: (assessment: Assessment) => void
+  bodyGoals: BodyGoal[]
+  onSave: () => Promise<string>
+}) {
+  const [message, setMessage] = useState('')
+  const [saving, setSaving] = useState(false)
+  const fields: Array<[keyof Assessment, string]> = [
+    ['weight', 'Peso (kg)'], ['height', 'Altura (cm)'], ['chest', 'Torax / busto (cm)'],
+    ['waist', 'Cintura (cm)'], ['abdomen', 'Abdomen (cm)'], ['hip', 'Quadril (cm)'],
+    ['rightArm', 'Braco direito (cm)'], ['leftArm', 'Braco esquerdo (cm)'],
+    ['rightThigh', 'Coxa direita (cm)'], ['leftThigh', 'Coxa esquerda (cm)'],
+    ['rightCalf', 'Panturrilha direita (cm)'], ['leftCalf', 'Panturrilha esquerda (cm)'],
+  ]
+
+  async function selectPhoto(angle: AssessmentPhoto['angle'], file?: File) {
+    if (!file) return
+    if (file.size > 6 * 1024 * 1024) {
+      setMessage('A foto deve ter no maximo 6 MB.')
+      return
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(new Error('Nao foi possivel ler a foto.'))
+      reader.readAsDataURL(file)
+    })
+    setAssessment({
+      ...assessment,
+      photos: [...assessment.photos.filter((photo) => photo.angle !== angle), { angle, dataUrl }],
+    })
+    setMessage('')
+  }
+
+  async function submitAssessment() {
+    setSaving(true)
+    const error = await onSave()
+    setMessage(error || 'Avaliacao salva com sucesso.')
+    setSaving(false)
+  }
+
+  return (
+    <div className="assessment-form form-grid compact">
+      <label className="field-label">Data da avaliacao
+        <input aria-label="Data da avaliacao" type="date" value={assessment.date} onChange={(event) => setAssessment({ ...assessment, date: event.target.value })} />
+      </label>
+      <div className="measurement-grid">
+        {fields.map(([field, label]) => (
+          <label className="field-label" key={field}>{label}
+            <input aria-label={label} inputMode="decimal" min="0" placeholder="0,0" step="0.1" type="number" value={String(assessment[field] ?? '')} onChange={(event) => setAssessment({ ...assessment, [field]: event.target.value })} />
+          </label>
+        ))}
+      </div>
+
+      <span className="field-title">Fotos atuais do aluno</span>
+      <div className="photo-slots" aria-label="Fotos da avaliacao">
+        {([['front', 'Frente'], ['side', 'Perfil'], ['back', 'Costas']] as Array<[AssessmentPhoto['angle'], string]>).map(([angle, label]) => {
+          const photo = assessment.photos.find((item) => item.angle === angle)
+          return (
+            <label className={photo ? 'photo-upload has-photo' : 'photo-upload'} key={angle}>
+              {photo ? <img alt={`Foto de ${label.toLowerCase()}`} src={photo.dataUrl} /> : <Camera size={22} />}
+              <span>{photo ? `Trocar ${label.toLowerCase()}` : label}</span>
+              <input accept="image/jpeg,image/png,image/webp" onChange={(event) => selectPhoto(angle, event.target.files?.[0])} type="file" />
+            </label>
+          )
+        })}
+      </div>
+
+      <span className="field-title">Objetivo corporal</span>
+      <div className="body-goal-grid">
+        {bodyGoals.map((goal) => (
+          <label className={assessment.targetBody === goal.name ? 'body-goal selected' : 'body-goal'} key={goal.name}>
+            <input checked={assessment.targetBody === goal.name} name="bodyGoal" onChange={() => setAssessment({ ...assessment, targetBody: goal.name })} type="radio" />
+            <img alt={goal.name} src={goal.url} />
+            <span>{goal.name}</span>
+          </label>
+        ))}
+      </div>
+
+      <label className="field-label">Observacoes
+        <textarea aria-label="Observacoes da avaliacao" placeholder="Postura, mobilidade, dores e observacoes visuais" value={assessment.notes} onChange={(event) => setAssessment({ ...assessment, notes: event.target.value })} />
+      </label>
+      {message ? <p className={message.includes('sucesso') ? 'form-message success-message' : 'form-message neutral-message'}>{message}</p> : null}
+      <button className="primary-button" disabled={saving} onClick={submitAssessment} type="button"><Save size={18} />{saving ? 'Salvando...' : 'Salvar avaliacao'}</button>
+    </div>
+  )
+}
+
+function AssessmentHistory({ assessments }: { assessments: Assessment[] }) {
+  if (!assessments.length) return <p className="empty-state">Nenhuma avaliacao registrada para este aluno.</p>
+
+  return (
+    <div className="assessment-history">
+      {assessments.map((item) => (
+        <article className="assessment-record" key={item.id ?? item.date}>
+          <div className="record-heading">
+            <span><CalendarDays size={17} /> {new Date(`${item.date}T12:00:00`).toLocaleDateString('pt-BR')}</span>
+            <strong>{item.weight ? `${item.weight} kg` : 'Peso nao informado'}</strong>
+          </div>
+          <div className="record-measures">
+            <span>Altura <b>{item.height || '-'} cm</b></span>
+            <span>Torax / busto <b>{item.chest || '-'} cm</b></span>
+            <span>Cintura <b>{item.waist || '-'} cm</b></span>
+            <span>Abdomen <b>{item.abdomen || '-'} cm</b></span>
+            <span>Quadril <b>{item.hip || '-'} cm</b></span>
+            <span>Braco direito <b>{item.rightArm || '-'} cm</b></span>
+            <span>Braco esquerdo <b>{item.leftArm || '-'} cm</b></span>
+            <span>Coxa direita <b>{item.rightThigh || '-'} cm</b></span>
+            <span>Coxa esquerda <b>{item.leftThigh || '-'} cm</b></span>
+            <span>Panturrilha direita <b>{item.rightCalf || '-'} cm</b></span>
+            <span>Panturrilha esquerda <b>{item.leftCalf || '-'} cm</b></span>
+            <span>Objetivo <b>{item.targetBody || '-'}</b></span>
+          </div>
+          {item.photos?.length ? (
+            <div className="record-photos">
+              {item.photos.filter((photo) => photo.dataUrl).map((photo) => (
+                <img alt={`Registro ${photo.angle}`} key={photo.id ?? photo.angle} src={photo.dataUrl} />
+              ))}
+            </div>
+          ) : null}
+          {item.notes ? <p>{item.notes}</p> : null}
+        </article>
+      ))}
+    </div>
+  )
+}
+
+function EvolutionChart({ assessments }: { assessments: Assessment[] }) {
+  const points = assessments.slice(0, 6).reverse()
+  const maximum = Math.max(...points.map((item) => Number(item.weight) || 0), 1)
+
+  if (!points.length) return <p className="empty-state">O grafico aparecera apos a primeira avaliacao.</p>
+
+  return (
+    <div className="evolution-chart" aria-label="Grafico de evolucao do peso">
+      {points.map((item, index) => (
+        <div className="chart-column" key={item.id ?? `${item.date}-${index}`}>
+          <span>{item.weight || '-'}</span>
+          <div style={{ height: `${Math.max(8, ((Number(item.weight) || 0) / maximum) * 100)}%` }} />
+          <small>{item.date.slice(5).split('-').reverse().join('/')}</small>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PlanCreator({
+  onSaveWorkout,
+  onSaveDiet,
+}: {
+  onSaveWorkout: (plan: Omit<WorkoutPlan, 'id'>) => Promise<string>
+  onSaveDiet: (plan: Omit<DietPlan, 'id'>) => Promise<string>
+}) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [workout, setWorkout] = useState({ name: '', weekStartDate: today, notes: '' })
+  const [diet, setDiet] = useState({ name: '', planDate: today, notes: '' })
+  const [message, setMessage] = useState('')
+
+  async function submitWorkout() {
+    if (!workout.name.trim()) return setMessage('Informe o nome do plano de treinamento.')
+    const error = await onSaveWorkout(workout)
+    setMessage(error || 'Plano de treinamento aplicado.')
+    if (!error) setWorkout({ name: '', weekStartDate: today, notes: '' })
+  }
+
+  async function submitDiet() {
+    if (!diet.name.trim()) return setMessage('Informe o nome do plano de dieta.')
+    const error = await onSaveDiet(diet)
+    setMessage(error || 'Plano de dieta aplicado.')
+    if (!error) setDiet({ name: '', planDate: today, notes: '' })
+  }
+
+  return (
+    <div className="plan-creator-grid">
+      <div className="form-grid compact">
+        <h3>Treinamento semanal</h3>
+        <input aria-label="Nome do plano de treinamento" placeholder="Nome do plano" value={workout.name} onChange={(event) => setWorkout({ ...workout, name: event.target.value })} />
+        <input aria-label="Inicio da semana" type="date" value={workout.weekStartDate} onChange={(event) => setWorkout({ ...workout, weekStartDate: event.target.value })} />
+        <textarea aria-label="Programacao semanal" placeholder="Segunda: inferiores; Terca: superiores..." value={workout.notes} onChange={(event) => setWorkout({ ...workout, notes: event.target.value })} />
+        <button className="primary-button" onClick={submitWorkout} type="button"><Dumbbell size={18} /> Aplicar treinamento</button>
+      </div>
+      <div className="form-grid compact">
+        <h3>Plano de dieta</h3>
+        <input aria-label="Nome do plano de dieta" placeholder="Nome do plano" value={diet.name} onChange={(event) => setDiet({ ...diet, name: event.target.value })} />
+        <input aria-label="Data do plano" type="date" value={diet.planDate} onChange={(event) => setDiet({ ...diet, planDate: event.target.value })} />
+        <textarea aria-label="Orientacoes da dieta" placeholder="Refeicoes, quantidades e orientacoes" value={diet.notes} onChange={(event) => setDiet({ ...diet, notes: event.target.value })} />
+        <button className="primary-button" onClick={submitDiet} type="button"><Apple size={18} /> Aplicar dieta</button>
+      </div>
+      {message ? <p className="form-message neutral-message">{message}</p> : null}
+    </div>
+  )
+}
+
+function PlansHistory({ workoutPlans, dietPlans }: { workoutPlans: WorkoutPlan[]; dietPlans: DietPlan[] }) {
+  return (
+    <div className="plans-history-grid">
+      <div>
+        <h3>Treinamentos aplicados</h3>
+        <div className="plan-list">
+          {workoutPlans.length ? workoutPlans.map((plan) => (
+            <article className="plan-record" key={plan.id}>
+              <Dumbbell size={18} />
+              <span><strong>{plan.name}</strong><small>Semana de {new Date(`${plan.weekStartDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></span>
+              <p>{plan.notes || 'Sem observacoes.'}</p>
+            </article>
+          )) : <p className="empty-state">Nenhum treinamento aplicado.</p>}
+        </div>
+      </div>
+      <div>
+        <h3>Dietas aplicadas</h3>
+        <div className="plan-list">
+          {dietPlans.length ? dietPlans.map((plan) => (
+            <article className="plan-record" key={plan.id}>
+              <Apple size={18} />
+              <span><strong>{plan.name}</strong><small>{new Date(`${plan.planDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></span>
+              <p>{plan.notes || 'Sem observacoes.'}</p>
+            </article>
+          )) : <p className="empty-state">Nenhuma dieta aplicada.</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StudentFolder({
   activeStudent,
   assessment,
   setAssessment,
+  assessments,
+  bodyGoals,
+  workoutPlans,
+  dietPlans,
+  loading,
+  canCreatePlans,
+  onSaveAssessment,
+  onSaveWorkoutPlan,
+  onSaveDietPlan,
 }: {
   activeStudent: Student
   assessment: Assessment
   setAssessment: (assessment: Assessment) => void
+  assessments: Assessment[]
+  bodyGoals: BodyGoal[]
+  workoutPlans: WorkoutPlan[]
+  dietPlans: DietPlan[]
+  loading: boolean
+  canCreatePlans: boolean
+  onSaveAssessment: () => Promise<string>
+  onSaveWorkoutPlan: (plan: Omit<WorkoutPlan, 'id'>) => Promise<string>
+  onSaveDietPlan: (plan: Omit<DietPlan, 'id'>) => Promise<string>
 }) {
-  return (
-    <section className="content-grid wide-first">
-      <Panel id="dietas" eyebrow="Dieta" title="Plano semanal e dieta do dia">
-        <div className="meal-grid">
-          {meals.map((meal) => (
-            <article className="meal-card" key={meal.name}>
-              <Apple size={18} />
-              <strong>{meal.name}</strong>
-              <span>{meal.amount}</span>
-              <small>{meal.guidance}</small>
-            </article>
-          ))}
-        </div>
-      </Panel>
+  if (!activeStudent.id) {
+    return <section className="panel full-panel"><p className="empty-state">Nenhum aluno vinculado foi selecionado.</p></section>
+  }
 
-      <Panel id="avaliacoes" eyebrow={activeStudent.name} title="Nova avaliacao fisica">
-        <AssessmentForm assessment={assessment} setAssessment={setAssessment} />
-      </Panel>
+  return (
+    <section className="student-folder" id="avaliacoes">
+      <div className="folder-heading">
+        <FolderOpen size={24} />
+        <div><p className="eyebrow">Pasta do aluno</p><h2>{activeStudent.name}</h2></div>
+        <span className="status-badge">{activeStudent.linkStatus === 'inactive' ? 'Inativo' : 'Ativo'}</span>
+      </div>
+
+      {loading ? <p className="empty-state">Carregando ficha do aluno...</p> : (
+        <>
+          <section className="folder-dashboard">
+            <div className="folder-summary">
+              <span>Aderencia semanal<strong>{activeStudent.adherence}%</strong></span>
+              <span>Avaliacoes<strong>{assessments.length}</strong></span>
+              <span>Planos aplicados<strong>{workoutPlans.length + dietPlans.length}</strong></span>
+            </div>
+            <div className="chart-panel">
+              <div className="record-heading"><strong>Aderencia e evolucao</strong><LineChart size={18} /></div>
+              <div className="adherence-meter">
+                <span>Treinos realizados <b>{activeStudent.adherence}%</b></span>
+                <div><i style={{ width: `${Math.max(0, Math.min(100, activeStudent.adherence))}%` }} /></div>
+              </div>
+              <EvolutionChart assessments={assessments} />
+            </div>
+          </section>
+
+          <section className="folder-grid">
+            <Panel eyebrow="Avaliacao" title="Registrar evolucao">
+              <AssessmentForm assessment={assessment} bodyGoals={bodyGoals} onSave={onSaveAssessment} setAssessment={setAssessment} />
+            </Panel>
+            <Panel eyebrow="Historico" title="Avaliacoes do aluno">
+              <AssessmentHistory assessments={assessments} />
+            </Panel>
+          </section>
+
+          {canCreatePlans ? (
+            <section className="panel full-panel" id="treinos">
+              <div className="panel-heading"><div><p className="eyebrow">Prescricao</p><h2>Criar e aplicar planos</h2></div></div>
+              <PlanCreator onSaveDiet={onSaveDietPlan} onSaveWorkout={onSaveWorkoutPlan} />
+            </section>
+          ) : null}
+
+          <section className="panel full-panel" id="dietas">
+            <div className="panel-heading"><div><p className="eyebrow">Historico</p><h2>Planos aplicados</h2></div></div>
+            <PlansHistory dietPlans={dietPlans} workoutPlans={workoutPlans} />
+          </section>
+        </>
+      )}
     </section>
-  )
-}
-
-function AssessmentForm({
-  assessment,
-  setAssessment,
-}: {
-  assessment: Assessment
-  setAssessment: (assessment: Assessment) => void
-}) {
-  return (
-    <div className="form-grid compact">
-      <input aria-label="Data da avaliacao" type="date" value={assessment.date} onChange={(event) => setAssessment({ ...assessment, date: event.target.value })} />
-      <div className="two-fields">
-        <input aria-label="Peso" placeholder="Peso" value={assessment.weight} onChange={(event) => setAssessment({ ...assessment, weight: event.target.value })} />
-        <input aria-label="Altura" placeholder="Altura" value={assessment.height} onChange={(event) => setAssessment({ ...assessment, height: event.target.value })} />
-      </div>
-      <input aria-label="Cintura" placeholder="Cintura" value={assessment.waist} onChange={(event) => setAssessment({ ...assessment, waist: event.target.value })} />
-      <input aria-label="Abdomen" placeholder="Abdomen" value={assessment.abdomen} onChange={(event) => setAssessment({ ...assessment, abdomen: event.target.value })} />
-      <input aria-label="Quadril" placeholder="Quadril" value={assessment.hip} onChange={(event) => setAssessment({ ...assessment, hip: event.target.value })} />
-      <select aria-label="Modelo de corpo atual" value={assessment.currentBody} onChange={(event) => setAssessment({ ...assessment, currentBody: event.target.value })}>
-        <option>Modelo 1</option>
-        <option>Modelo 2</option>
-        <option>Modelo 3</option>
-        <option>Modelo 4</option>
-      </select>
-      <select aria-label="Objetivo corporal" value={assessment.targetBody} onChange={(event) => setAssessment({ ...assessment, targetBody: event.target.value })}>
-        <option>Objetivo 1</option>
-        <option>Objetivo 2</option>
-        <option>Objetivo 3</option>
-      </select>
-      <div className="photo-slots" aria-label="Fotos da avaliacao">
-        <span><Camera size={18} /> Frente</span>
-        <span><Camera size={18} /> Perfil</span>
-        <span><Camera size={18} /> Costas</span>
-      </div>
-    </div>
   )
 }
 
@@ -1155,12 +1541,24 @@ function StudentArea({
   activeStudent,
   assessment,
   setAssessment,
+  assessments,
+  bodyGoals,
+  workoutPlans,
+  dietPlans,
+  loading,
+  onSaveAssessment,
   studentDoubt,
   setStudentDoubt,
 }: {
   activeStudent: Student
   assessment: Assessment
   setAssessment: (assessment: Assessment) => void
+  assessments: Assessment[]
+  bodyGoals: BodyGoal[]
+  workoutPlans: WorkoutPlan[]
+  dietPlans: DietPlan[]
+  loading: boolean
+  onSaveAssessment: () => Promise<string>
   studentDoubt: string
   setStudentDoubt: (value: string) => void
 }) {
@@ -1172,7 +1570,7 @@ function StudentArea({
         <Metric icon={CheckCircle2} label="Treinos feitos" value={`${activeStudent.adherence}%`} detail="Semana atual" />
       </section>
 
-      <section className="content-grid wide-first">
+      <section className="content-grid single-column">
         <Panel eyebrow="Treino diario" title="Executar treino do dia">
           <div className="exercise-table">
             {initialExercises.map((exercise) => (
@@ -1198,10 +1596,22 @@ function StudentArea({
           />
         </Panel>
 
-        <Panel eyebrow="Ficha corporal" title="Registrar medidas e fotos">
-          <AssessmentForm assessment={assessment} setAssessment={setAssessment} />
-        </Panel>
       </section>
+
+      <StudentFolder
+        activeStudent={activeStudent}
+        assessment={assessment}
+        assessments={assessments}
+        bodyGoals={bodyGoals}
+        canCreatePlans={false}
+        dietPlans={dietPlans}
+        loading={loading}
+        onSaveAssessment={onSaveAssessment}
+        onSaveDietPlan={async () => 'Somente o personal pode criar planos.'}
+        onSaveWorkoutPlan={async () => 'Somente o personal pode criar planos.'}
+        setAssessment={setAssessment}
+        workoutPlans={workoutPlans}
+      />
 
       <section className="panel full-panel">
         <div className="panel-heading">

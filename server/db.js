@@ -130,6 +130,26 @@ if (studentCount.total === 0) {
 
 db.exec(`
   UPDATE students
+  SET user_id = (
+    SELECT users.id
+    FROM users
+    JOIN user_roles ON user_roles.id = users.role_id
+    WHERE user_roles.name = 'aluno'
+      AND lower(users.name) = lower(students.name)
+    LIMIT 1
+  )
+  WHERE user_id IS NULL
+    AND EXISTS (
+      SELECT 1
+      FROM users
+      JOIN user_roles ON user_roles.id = users.role_id
+      WHERE user_roles.name = 'aluno'
+        AND lower(users.name) = lower(students.name)
+    )
+`)
+
+db.exec(`
+  UPDATE students
   SET trainer_id = (
     SELECT trainers.id
     FROM trainers
