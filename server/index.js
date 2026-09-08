@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs'
 import express from 'express'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db, toPublicUser } from './db.js'
@@ -13,6 +13,7 @@ const rootDir = join(__dirname, '..')
 const uploadDir = join(rootDir, 'data', 'uploads')
 const maxExerciseVideoBytes = 8 * 1024 * 1024
 const maxExerciseAudioBytes = 3 * 1024 * 1024
+const maxProfilePhotoBytes = 3 * 1024 * 1024
 
 mkdirSync(uploadDir, { recursive: true })
 
@@ -214,6 +215,46 @@ function saveExerciseMedia(value, kind, durationSeconds = 0) {
   return { value: `/api/exercise-media/${fileName}`, error: '' }
 }
 
+function saveProfilePhoto(userId, dataUrl) {
+  const value = String(dataUrl ?? '')
+  if (!value.startsWith('data:image/')) return { fileName: '', error: 'Foto de perfil invalida.' }
+
+  const match = value.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/)
+  if (!match) return { fileName: '', error: 'Use uma foto JPG, PNG ou WebP.' }
+  const buffer = Buffer.from(match[2], 'base64')
+  if (!buffer.length || buffer.length > maxProfilePhotoBytes) {
+    return { fileName: '', error: 'A foto de perfil deve ter no maximo 3 MB.' }
+  }
+
+  const extension = match[1] === 'image/png' ? '.png' : match[1] === 'image/webp' ? '.webp' : '.jpg'
+  const fileName = `profile-${userId}-${Date.now()}-${randomBytes(4).toString('hex')}${extension}`
+  writeFileSync(join(uploadDir, fileName), buffer)
+  return { fileName, error: '' }
+}
+
+function profilePhotoData(fileName) {
+  if (!fileName) return ''
+  const safeName = basename(String(fileName))
+  const filePath = join(uploadDir, safeName)
+  if (!safeName.startsWith('profile-') || !existsSync(filePath)) return ''
+  const mimeType = safeName.endsWith('.png') ? 'image/png' : safeName.endsWith('.webp') ? 'image/webp' : 'image/jpeg'
+  return `data:${mimeType};base64,${readFileSync(filePath).toString('base64')}`
+}
+
+function getUserProfile(userId) {
+  const profile = db.prepare(
+    `SELECT users.id, users.name, users.email, COALESCE(users.birth_date, '') AS birthDate,
+      COALESCE(users.profile_photo_path, '') AS profilePhotoPath,
+      user_roles.name AS role, COALESCE(trainers.registration_code, '') AS crefNumber
+     FROM users
+     JOIN user_roles ON user_roles.id = users.role_id
+     LEFT JOIN trainers ON trainers.user_id = users.id
+     WHERE users.id = ?`,
+  ).get(userId)
+  if (!profile) return null
+  return { ...profile, profilePhoto: profilePhotoData(profile.profilePhotoPath), profilePhotoPath: undefined }
+}
+
 const weekDays = [
   { key: 'monday', label: 'Segunda-feira' },
   { key: 'tuesday', label: 'Terca-feira' },
@@ -406,6 +447,106 @@ app.get('/api/auth/me', (request, response) => {
   if (!user) return
 
   response.json({ user: toPublicUser(user) })
+})
+
+app.get('/api/profile', (request, response) => {
+  const user = requireUser(request, response)
+  if (!user) return
+
+  const profile = getUserProfile(user.id)
+  if (!profile) {
+    response.status(404).json({ message: 'Perfil nao encontrado.' })
+    return
+  }
+  response.json({ profile })
+})
+
+app.patch('/api/profile', (request, response) => {
+  const user = requireUser(request, response)
+  if (!user) return
+
+  const name = String(request.body?.name ?? '').trim()
+  const email = String(request.body?.email ?? '').trim().toLowerCase()
+  const birthDate = String(request.body?.birthDate ?? '').trim()
+  const crefNumber = String(request.body?.crefNumber ?? '').trim()
+  const profilePhoto = request.body?.profilePhoto
+
+  if (!name || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    response.status(400).json({ message: 'Informe nome e e-mail validos.' })
+    return
+  }
+  if (birthDate && (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate) || birthDate > new Date().toISOString().slice(0, 10))) {
+    response.status(400).json({ message: 'Data de nascimento invalida.' })
+    return
+  }
+  const duplicate = db.prepare('SELECT id FROM users WHERE email = ? AND id <> ?').get(email, user.id)
+  if (duplicate) {
+    response.status(409).json({ message: 'Este e-mail ja pertence a outro usuario.' })
+    return
+  }
+
+  const current = db.prepare('SELECT profile_photo_path AS profilePhotoPath FROM users WHERE id = ?').get(user.id)
+  let photoFileName = current?.profilePhotoPath ?? ''
+  if (profilePhoto === '') {
+    photoFileName = ''
+  } else if (profilePhoto !== undefined && profilePhoto !== null && String(profilePhoto).startsWith('data:image/')) {
+    const savedPhoto = saveProfilePhoto(user.id, profilePhoto)
+    if (savedPhoto.error) {
+      response.status(400).json({ message: savedPhoto.error })
+      return
+    }
+    photoFileName = savedPhoto.fileName
+  }
+
+  const transaction = db.transaction(() => {
+    db.prepare(
+      `UPDATE users SET name = ?, email = ?, birth_date = ?, profile_photo_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    ).run(name, email, birthDate || null, photoFileName || null, user.id)
+    if (user.role === 'personal') {
+      ensureTrainerForUser(user.id)
+      db.prepare('UPDATE trainers SET registration_code = ? WHERE user_id = ?').run(crefNumber || null, user.id)
+    }
+    if (user.role === 'aluno') {
+      db.prepare('UPDATE students SET name = ?, birth_date = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(name, birthDate || null, user.id)
+    }
+  })
+  transaction()
+
+  if (photoFileName !== current?.profilePhotoPath && current?.profilePhotoPath) {
+    const oldName = basename(String(current.profilePhotoPath))
+    const oldPath = join(uploadDir, oldName)
+    if (oldName.startsWith(`profile-${user.id}-`) && existsSync(oldPath)) unlinkSync(oldPath)
+  }
+
+  response.json({ profile: getUserProfile(user.id) })
+})
+
+app.patch('/api/profile/password', (request, response) => {
+  const user = requireUser(request, response)
+  if (!user) return
+
+  const currentPassword = String(request.body?.currentPassword ?? '')
+  const newPassword = String(request.body?.newPassword ?? '')
+  const record = db.prepare('SELECT password_hash AS passwordHash FROM users WHERE id = ?').get(user.id)
+  if (!record || !bcrypt.compareSync(currentPassword, record.passwordHash ?? '')) {
+    response.status(400).json({ message: 'A senha atual esta incorreta.' })
+    return
+  }
+  if (newPassword.length < 6) {
+    response.status(400).json({ message: 'A nova senha deve ter pelo menos 6 caracteres.' })
+    return
+  }
+  if (currentPassword === newPassword) {
+    response.status(400).json({ message: 'A nova senha deve ser diferente da senha atual.' })
+    return
+  }
+
+  db.prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(bcrypt.hashSync(newPassword, 10), user.id)
+  const currentTokenHash = hashToken(getBearerToken(request))
+  db.prepare(
+    'UPDATE user_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND token_hash <> ? AND revoked_at IS NULL',
+  ).run(user.id, currentTokenHash)
+  response.json({ ok: true })
 })
 
 app.post('/api/auth/login', (request, response) => {
