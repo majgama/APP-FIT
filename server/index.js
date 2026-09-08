@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs'
 import express from 'express'
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db, toPublicUser } from './db.js'
 
@@ -11,6 +11,8 @@ const port = Number(process.env.PORT ?? 3000)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const rootDir = join(__dirname, '..')
 const uploadDir = join(rootDir, 'data', 'uploads')
+const maxExerciseVideoBytes = 8 * 1024 * 1024
+const maxExerciseAudioBytes = 3 * 1024 * 1024
 
 mkdirSync(uploadDir, { recursive: true })
 
@@ -163,6 +165,55 @@ function saveAssessmentPhoto(studentId, photo) {
   return { angle, fileName }
 }
 
+function saveExerciseMedia(value, kind, durationSeconds = 0) {
+  const dataUrl = String(value ?? '')
+  if (!dataUrl.startsWith('data:')) {
+    if (kind === 'video' && /^https?:\/\//i.test(dataUrl)) {
+      try {
+        const host = new URL(dataUrl).hostname.replace(/^www\./, '')
+        if (!['youtube.com', 'm.youtube.com', 'youtu.be'].includes(host)) {
+          return { value: '', error: 'Informe um link valido do YouTube.' }
+        }
+      } catch {
+        return { value: '', error: 'Informe um link valido do YouTube.' }
+      }
+    }
+    return { value: dataUrl, error: '' }
+  }
+
+  const match = dataUrl.match(/^data:([a-zA-Z0-9/+.-]+);base64,(.+)$/)
+  if (!match) return { value: '', error: 'Arquivo de midia invalido.' }
+
+  const mimeType = match[1].toLowerCase()
+  const allowedVideo = ['video/mp4', 'video/webm', 'video/quicktime', 'image/gif']
+  const allowedAudio = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/ogg', 'audio/mp4']
+  const allowedTypes = kind === 'video' ? allowedVideo : allowedAudio
+  if (!allowedTypes.includes(mimeType)) return { value: '', error: `Formato de ${kind === 'video' ? 'video ou GIF' : 'audio'} nao permitido.` }
+
+  const buffer = Buffer.from(match[2], 'base64')
+  const byteLimit = kind === 'video' ? maxExerciseVideoBytes : maxExerciseAudioBytes
+  if (!buffer.length || buffer.length > byteLimit) {
+    return { value: '', error: `${kind === 'video' ? 'Video ou GIF' : 'Audio'} acima do limite de ${kind === 'video' ? '8 MB' : '3 MB'}.` }
+  }
+
+  const duration = Number(durationSeconds) || 0
+  if (kind === 'video' && mimeType !== 'image/gif' && duration > 5.2) {
+    return { value: '', error: 'O video deve ter no maximo 5 segundos.' }
+  }
+  if (kind === 'audio' && duration > 60.2) {
+    return { value: '', error: 'O audio deve ter no maximo 60 segundos.' }
+  }
+
+  const extensions = {
+    'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'image/gif': '.gif',
+    'audio/mpeg': '.mp3', 'audio/mp3': '.mp3', 'audio/wav': '.wav', 'audio/x-wav': '.wav', 'audio/webm': '.webm',
+    'audio/ogg': '.ogg', 'audio/mp4': '.m4a',
+  }
+  const fileName = `exercise-${kind}-${Date.now()}-${randomBytes(5).toString('hex')}${extensions[mimeType]}`
+  writeFileSync(join(uploadDir, fileName), buffer)
+  return { value: `/api/exercise-media/${fileName}`, error: '' }
+}
+
 const weekDays = [
   { key: 'monday', label: 'Segunda-feira' },
   { key: 'tuesday', label: 'Terca-feira' },
@@ -259,6 +310,8 @@ function getAppliedPlanDays(planId) {
   const exercises = db.prepare(
     `
     SELECT exercises.id, exercises.name, exercises.muscle_name AS muscle,
+      COALESCE(exercises.video_or_gif_path, '') AS media,
+      COALESCE(exercises.audio_path, '') AS audio,
       COALESCE(daily_workout_exercises.sets, 0) AS sets,
       COALESCE(daily_workout_exercises.reps, '') AS reps,
       COALESCE(daily_workout_exercises.load, 'moderado') AS load,
@@ -870,6 +923,54 @@ app.get('/api/body-goals', (_request, response) => {
   })
 })
 
+app.get('/api/exercise-media/:fileName', (request, response) => {
+  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+  if (!user) return
+
+  const fileName = basename(String(request.params.fileName ?? ''))
+  if (!fileName.startsWith('exercise-')) {
+    response.status(404).json({ message: 'Midia nao encontrada.' })
+    return
+  }
+
+  const mediaPath = `/api/exercise-media/${fileName}`
+  const exercise = db.prepare(
+    'SELECT id, created_by_user_id AS createdByUserId, visibility FROM exercises WHERE video_or_gif_path = ? OR audio_path = ?',
+  ).get(mediaPath, mediaPath)
+  if (!exercise) {
+    response.status(404).json({ message: 'Midia nao encontrada.' })
+    return
+  }
+
+  let allowed = exercise.visibility === 'platform' || exercise.createdByUserId === user.id
+  if (!allowed && user.role === 'aluno') {
+    allowed = Boolean(db.prepare(
+      `SELECT 1 FROM daily_workout_exercises
+       JOIN daily_workouts ON daily_workouts.id = daily_workout_exercises.daily_workout_id
+       JOIN weekly_plans ON weekly_plans.id = daily_workouts.weekly_plan_id
+       JOIN students ON students.id = weekly_plans.student_id
+       WHERE daily_workout_exercises.exercise_id = ? AND students.user_id = ? LIMIT 1`,
+    ).get(exercise.id, user.id))
+  }
+  if (!allowed && user.role === 'personal') {
+    const trainer = getTrainerByUserId(user.id)
+    allowed = Boolean(trainer && db.prepare(
+      `SELECT 1 FROM daily_workout_exercises
+       JOIN daily_workouts ON daily_workouts.id = daily_workout_exercises.daily_workout_id
+       JOIN weekly_plans ON weekly_plans.id = daily_workouts.weekly_plan_id
+       JOIN student_trainers ON student_trainers.student_id = weekly_plans.student_id
+       WHERE daily_workout_exercises.exercise_id = ? AND student_trainers.trainer_id = ? LIMIT 1`,
+    ).get(exercise.id, trainer.id))
+  }
+
+  const filePath = join(uploadDir, fileName)
+  if (!allowed || !existsSync(filePath)) {
+    response.status(404).json({ message: 'Midia nao encontrada.' })
+    return
+  }
+  response.sendFile(filePath)
+})
+
 app.get('/api/assessment-photos/:photoId', (request, response) => {
   const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
   if (!user) return
@@ -1099,15 +1200,23 @@ app.post('/api/workout-library/exercises', (request, response) => {
     return
   }
 
+  const savedMedia = saveExerciseMedia(media, 'video', request.body?.mediaDuration)
+  const savedAudio = saveExerciseMedia(audio, 'audio', request.body?.audioDuration)
+  const mediaError = savedMedia.error || savedAudio.error
+  if (mediaError) {
+    response.status(400).json({ message: mediaError })
+    return
+  }
+
   const visibility = user.role === 'admin' ? 'platform' : 'private'
   const result = db.prepare(
     `INSERT INTO exercises (
       created_by_user_id, visibility, name, muscle_name, video_or_gif_path, audio_path,
       default_sets, default_reps, default_load, rest_text, observation_text
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(user.id, visibility, name, muscle, media, audio, sets || null, reps, load, rest, notes)
+  ).run(user.id, visibility, name, muscle, savedMedia.value, savedAudio.value, sets || null, reps, load, rest, notes)
 
-  response.status(201).json({ exercise: { id: result.lastInsertRowid, name, muscle, sets: String(sets || ''), reps, load, rest, notes, media, audio, visibility } })
+  response.status(201).json({ exercise: { id: result.lastInsertRowid, name, muscle, sets: String(sets || ''), reps, load, rest, notes, media: savedMedia.value, audio: savedAudio.value, visibility } })
 })
 
 app.post('/api/workout-library/daily-templates', (request, response) => {
@@ -1411,6 +1520,14 @@ app.post('/api/exercises', (request, response) => {
     return
   }
 
+  const savedMedia = saveExerciseMedia(media, 'video', request.body?.mediaDuration)
+  const savedAudio = saveExerciseMedia(audio, 'audio', request.body?.audioDuration)
+  const mediaError = savedMedia.error || savedAudio.error
+  if (mediaError) {
+    response.status(400).json({ message: mediaError })
+    return
+  }
+
   const visibility = user.role === 'admin' ? 'platform' : 'private'
   const result = db
     .prepare(
@@ -1431,15 +1548,15 @@ app.post('/api/exercises', (request, response) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
-    .run(user.id, visibility, name, muscle, media, audio, sets || null, reps, load, rest, notes)
+    .run(user.id, visibility, name, muscle, savedMedia.value, savedAudio.value, sets || null, reps, load, rest, notes)
 
   response.status(201).json({
     exercise: {
       id: result.lastInsertRowid,
       name,
       muscle,
-      media,
-      audio,
+      media: savedMedia.value,
+      audio: savedAudio.value,
       sets: sets ? String(sets) : '',
       reps,
       load,

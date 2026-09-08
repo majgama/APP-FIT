@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -21,12 +21,15 @@ import {
   LockKeyhole,
   Mail,
   MessageCircle,
+  Mic,
   Play,
   Plus,
   Power,
   Save,
   ShieldCheck,
+  Square,
   Trash2,
+  Upload,
   UserPlus,
   UserCog,
   Users,
@@ -81,6 +84,8 @@ type Exercise = {
   rest: string
   notes: string
   visibility?: 'platform' | 'private'
+  mediaDuration?: number
+  audioDuration?: number
 }
 
 
@@ -304,6 +309,8 @@ const blankExercise: Exercise = {
   load: 'moderado',
   rest: '',
   notes: '',
+  mediaDuration: 0,
+  audioDuration: 0,
 }
 
 const blankStudent: Student = {
@@ -1410,12 +1417,129 @@ function ExerciseForm({
   setExerciseForm: (exercise: Exercise) => void
   addExercise: () => void
 }) {
+  const [mediaMode, setMediaMode] = useState<'upload' | 'youtube'>('upload')
+  const [mediaMessage, setMediaMessage] = useState('')
+  const [isRecording, setIsRecording] = useState(false)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const recordingStartedAt = useRef(0)
+  const recordingTimer = useRef<number | undefined>(undefined)
+
+  function readFile(file: Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(new Error('Nao foi possivel ler o arquivo.'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  function readDuration(file: File, kind: 'video' | 'audio') {
+    return new Promise<number>((resolve, reject) => {
+      const element = document.createElement(kind)
+      const objectUrl = URL.createObjectURL(file)
+      element.preload = 'metadata'
+      element.onloadedmetadata = () => {
+        URL.revokeObjectURL(objectUrl)
+        resolve(Number.isFinite(element.duration) ? element.duration : 0)
+      }
+      element.onerror = () => {
+        URL.revokeObjectURL(objectUrl)
+        reject(new Error('Nao foi possivel verificar a duracao do arquivo.'))
+      }
+      element.src = objectUrl
+    })
+  }
+
+  async function selectVideo(file?: File) {
+    if (!file) return
+    if (file.size > 8 * 1024 * 1024) return setMediaMessage('O video ou GIF deve ter no maximo 8 MB.')
+    try {
+      const duration = file.type === 'image/gif' ? 0 : await readDuration(file, 'video')
+      if (duration > 5.2) return setMediaMessage('O video deve ter no maximo 5 segundos.')
+      setExerciseForm({ ...exerciseForm, media: await readFile(file), mediaDuration: duration })
+      setMediaMessage(`${file.name} selecionado.`)
+    } catch (error) {
+      setMediaMessage(error instanceof Error ? error.message : 'Arquivo de video invalido.')
+    }
+  }
+
+  async function selectAudio(file?: File) {
+    if (!file) return
+    if (file.size > 3 * 1024 * 1024) return setMediaMessage('O audio deve ter no maximo 3 MB.')
+    try {
+      const duration = await readDuration(file, 'audio')
+      if (duration > 60.2) return setMediaMessage('O audio deve ter no maximo 60 segundos.')
+      setExerciseForm({ ...exerciseForm, audio: await readFile(file), audioDuration: duration })
+      setMediaMessage(`${file.name} selecionado.`)
+    } catch (error) {
+      setMediaMessage(error instanceof Error ? error.message : 'Arquivo de audio invalido.')
+    }
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      setMediaMessage('Gravacao de audio nao suportada neste navegador.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      const chunks: Blob[] = []
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data) }
+      recorder.onstop = async () => {
+        window.clearTimeout(recordingTimer.current)
+        stream.getTracks().forEach((track) => track.stop())
+        const blob = new Blob(chunks, { type: (recorder.mimeType || 'audio/webm').split(';')[0] })
+        const duration = Math.min(60, (Date.now() - recordingStartedAt.current) / 1000)
+        if (blob.size > 3 * 1024 * 1024) {
+          setMediaMessage('A gravacao ultrapassou o limite de 3 MB.')
+        } else {
+          setExerciseForm({ ...exerciseForm, audio: await readFile(blob), audioDuration: duration })
+          setMediaMessage('Narracao gravada com sucesso.')
+        }
+        setIsRecording(false)
+      }
+      recorderRef.current = recorder
+      recordingStartedAt.current = Date.now()
+      recorder.start()
+      setIsRecording(true)
+      setMediaMessage('Gravando narracao...')
+      recordingTimer.current = window.setTimeout(() => recorder.state === 'recording' && recorder.stop(), 60000)
+    } catch {
+      setMediaMessage('Permita o acesso ao microfone para iniciar a gravacao.')
+    }
+  }
+
+  function stopRecording() {
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop()
+  }
+
   return (
     <div className="form-grid compact">
       <input aria-label="Nome do exercicio" placeholder="Nome do exercicio" value={exerciseForm.name} onChange={(event) => setExerciseForm({ ...exerciseForm, name: event.target.value })} />
       <input aria-label="Musculo" placeholder="Musculo" value={exerciseForm.muscle} onChange={(event) => setExerciseForm({ ...exerciseForm, muscle: event.target.value })} />
-      <input aria-label="Video ou gif" placeholder="Video ou gif" value={exerciseForm.media} onChange={(event) => setExerciseForm({ ...exerciseForm, media: event.target.value })} />
-      <input aria-label="Audio" placeholder="Audio" value={exerciseForm.audio} onChange={(event) => setExerciseForm({ ...exerciseForm, audio: event.target.value })} />
+      <div className="exercise-media-field">
+        <span className="field-title">Demonstracao visual</span>
+        <div className="segmented-control media-mode">
+          <button className={mediaMode === 'upload' ? 'active' : ''} onClick={() => setMediaMode('upload')} type="button"><Upload size={16} /> Video ou GIF</button>
+          <button className={mediaMode === 'youtube' ? 'active' : ''} onClick={() => { setMediaMode('youtube'); setExerciseForm({ ...exerciseForm, media: '', mediaDuration: 0 }) }} type="button"><Video size={16} /> YouTube</button>
+        </div>
+        {mediaMode === 'upload' ? (
+          <label className="media-upload"><Upload size={19} /><span>Selecionar video ou GIF</span><small>Video ate 5 segundos; arquivo ate 8 MB</small><input accept="video/mp4,video/webm,video/quicktime,image/gif" onChange={(event) => selectVideo(event.target.files?.[0])} type="file" /></label>
+        ) : <input aria-label="Link do YouTube" placeholder="https://youtube.com/watch?v=..." value={exerciseForm.media} onChange={(event) => setExerciseForm({ ...exerciseForm, media: event.target.value, mediaDuration: 0 })} />}
+        {exerciseForm.media.startsWith('data:image/gif') ? <img className="exercise-media-preview" alt="Previa do GIF" src={exerciseForm.media} /> : null}
+        {exerciseForm.media.startsWith('data:video') ? <video className="exercise-media-preview" controls src={exerciseForm.media} /> : null}
+      </div>
+      <div className="exercise-media-field">
+        <span className="field-title">Orientacao em audio</span>
+        <div className="audio-actions">
+          <label className="media-upload compact-upload"><Upload size={18} /><span>Adicionar arquivo</span><small>Ate 60 segundos e 3 MB</small><input accept="audio/mpeg,audio/wav,audio/webm,audio/ogg,audio/mp4" onChange={(event) => selectAudio(event.target.files?.[0])} type="file" /></label>
+          <button className={isRecording ? 'record-button recording' : 'record-button'} onClick={isRecording ? stopRecording : startRecording} type="button">{isRecording ? <Square size={17} /> : <Mic size={18} />}{isRecording ? 'Parar gravacao' : 'Narrar audio'}</button>
+        </div>
+        {exerciseForm.audio.startsWith('data:audio') ? <audio className="audio-preview" controls src={exerciseForm.audio} /> : null}
+      </div>
+      {mediaMessage ? <p className="form-message neutral-message">{mediaMessage}</p> : null}
       <div className="two-fields">
         <input aria-label="Series" placeholder="Series" value={exerciseForm.sets} onChange={(event) => setExerciseForm({ ...exerciseForm, sets: event.target.value })} />
         <input aria-label="Repeticoes" placeholder="Repeticoes" value={exerciseForm.reps} onChange={(event) => setExerciseForm({ ...exerciseForm, reps: event.target.value })} />
@@ -1432,6 +1556,55 @@ function ExerciseForm({
         <Plus size={18} />
         Salvar exercicio
       </button>
+    </div>
+  )
+}
+
+function youtubeEmbedUrl(value: string) {
+  try {
+    const url = new URL(value)
+    const host = url.hostname.replace(/^www\./, '')
+    const videoId = host === 'youtu.be' ? url.pathname.slice(1).split('/')[0] : url.searchParams.get('v') || url.pathname.split('/').filter(Boolean).pop()
+    return videoId ? `https://www.youtube.com/embed/${videoId}` : ''
+  } catch {
+    return ''
+  }
+}
+
+function ExerciseMedia({ exercise }: { exercise: Exercise }) {
+  const [videoUrl, setVideoUrl] = useState('')
+  const [audioUrl, setAudioUrl] = useState('')
+  const youtubeUrl = youtubeEmbedUrl(exercise.media)
+
+  useEffect(() => {
+    const objectUrls: string[] = []
+    let cancelled = false
+    const token = localStorage.getItem('app-fit-auth-token')
+
+    async function load(path: string, setter: (value: string) => void) {
+      if (!path.startsWith('/api/exercise-media/')) return
+      const response = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      if (!response.ok || cancelled) return
+      const objectUrl = URL.createObjectURL(await response.blob())
+      objectUrls.push(objectUrl)
+      if (!cancelled) setter(objectUrl)
+    }
+
+    load(exercise.media, setVideoUrl).catch(console.error)
+    load(exercise.audio, setAudioUrl).catch(console.error)
+    return () => {
+      cancelled = true
+      objectUrls.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [exercise.audio, exercise.media])
+
+  if (!youtubeUrl && !videoUrl && !audioUrl) return null
+
+  return (
+    <div className="exercise-playback">
+      {youtubeUrl ? <iframe allow="accelerometer; autoplay; encrypted-media; picture-in-picture" allowFullScreen src={youtubeUrl} title={`Demonstracao de ${exercise.name}`} /> : null}
+      {videoUrl ? exercise.media.toLowerCase().endsWith('.gif') ? <img alt={`Demonstracao de ${exercise.name}`} src={videoUrl} /> : <video controls playsInline src={videoUrl} /> : null}
+      {audioUrl ? <audio controls src={audioUrl} /> : null}
     </div>
   )
 }
@@ -1963,7 +2136,7 @@ function StudentWorkoutPlans({ plans, onComplete }: { plans: WorkoutPlan[]; onCo
             {selectedWorkout?.instructions ? <p>{selectedWorkout.instructions}</p> : null}
             <div className="exercise-table">
               {selectedWorkout?.exercises.length ? selectedWorkout.exercises.map((exercise, index) => (
-                <article className="exercise-row" key={`${exercise.id}-${index}`}><span className="exercise-order">{index + 1}</span><span><strong>{exercise.name}</strong><small>{exercise.muscle} - {exercise.sets || '-'} series x {exercise.reps || '-'} - descanso {exercise.rest || '-'}</small>{exercise.notes ? <small>{exercise.notes}</small> : null}</span><label className="check-pill"><input type="checkbox" /> Realizado</label></article>
+                <article className="exercise-row" key={`${exercise.id}-${index}`}><span className="exercise-order">{index + 1}</span><span><strong>{exercise.name}</strong><small>{exercise.muscle} - {exercise.sets || '-'} series x {exercise.reps || '-'} - descanso {exercise.rest || '-'}</small>{exercise.notes ? <small>{exercise.notes}</small> : null}</span><label className="check-pill"><input type="checkbox" /> Realizado</label><ExerciseMedia exercise={exercise} /></article>
               )) : <p className="empty-state">Dia de descanso. Nenhum exercicio programado.</p>}
             </div>
           </div>
