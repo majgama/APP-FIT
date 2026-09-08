@@ -1268,6 +1268,108 @@ textarea {
   background: rgba(42, 161, 99, 0.18);
 }
 
+.modal-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(2, 7, 14, 0.78);
+  backdrop-filter: blur(5px);
+}
+
+.confirmation-modal {
+  position: relative;
+  display: grid;
+  width: min(100%, 470px);
+  gap: 16px;
+  padding: 26px;
+  border: 1px solid rgba(245, 104, 104, 0.28);
+  border-radius: 8px;
+  color: #e8edf6;
+  background: #111a27;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+.confirmation-modal h2,
+.confirmation-modal p {
+  margin: 0;
+}
+
+.confirmation-modal > p {
+  color: #b9c5d7;
+  line-height: 1.6;
+}
+
+.confirmation-modal > strong {
+  color: #ffffff;
+}
+
+.modal-warning {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 50%;
+  color: #ff9999;
+  background: rgba(207, 61, 61, 0.17);
+}
+
+.modal-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #aab6cb;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.modal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.danger-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #b83232;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.danger-button:hover {
+  background: #cf3d3d;
+}
+
+.danger-button:disabled,
+.modal-close:disabled,
+.modal-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.modal-error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #ffc4c4 !important;
+  background: rgba(207, 61, 61, 0.15);
+  font-size: 0.82rem;
+}
+
 @media (max-width: 1100px) {
   .folder-dashboard,
   .folder-grid {
@@ -1301,5 +1403,13 @@ textarea {
 
   .folder-heading {
     align-items: flex-start;
+  }
+
+  .confirmation-modal {
+    padding: 22px 18px 18px;
+  }
+
+  .modal-actions {
+    grid-template-columns: 1fr;
   }
 }

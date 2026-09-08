@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import {
   Activity,
+  AlertTriangle,
   Apple,
   BarChart3,
   CalendarDays,
@@ -31,6 +32,7 @@ import {
   Copy,
   Video,
   Volume2,
+  X,
 } from 'lucide-react'
 import './App.css'
 
@@ -293,6 +295,9 @@ function App() {
   const [studentDoubt, setStudentDoubt] = useState('')
   const [invitationToken, setInvitationToken] = useState('')
   const [studentInvitation, setStudentInvitation] = useState<StudentInvitation | null>(null)
+  const [studentToDeactivate, setStudentToDeactivate] = useState<Student | null>(null)
+  const [isDeactivating, setIsDeactivating] = useState(false)
+  const [deactivationError, setDeactivationError] = useState('')
 
   const activeStudent = useMemo(
     () => students.find((student) => student.name === selectedStudent) ?? students[0] ?? blankStudent,
@@ -524,6 +529,22 @@ function App() {
         return ''
       })
       .catch((error) => error.message)
+  }
+
+  async function confirmStudentDeactivation() {
+    if (!studentToDeactivate?.id) return
+
+    setIsDeactivating(true)
+    setDeactivationError('')
+    const error = await updateStudentStatus(studentToDeactivate.id, 'inactive')
+    setIsDeactivating(false)
+
+    if (error) {
+      setDeactivationError(error)
+      return
+    }
+
+    setStudentToDeactivate(null)
   }
 
   async function refreshStudentFolder(studentId: number) {
@@ -777,7 +798,8 @@ function App() {
                             className="mini-icon-button"
                             onClick={(event) => {
                               event.stopPropagation()
-                              updateStudentStatus(student.id!, 'inactive')
+                              setDeactivationError('')
+                              setStudentToDeactivate(student)
                             }}
                             type="button"
                           >
@@ -903,7 +925,74 @@ function App() {
           />
         ) : null}
       </section>
+
+      {studentToDeactivate ? (
+        <DeactivateStudentDialog
+          error={deactivationError}
+          isSubmitting={isDeactivating}
+          onCancel={() => setStudentToDeactivate(null)}
+          onConfirm={confirmStudentDeactivation}
+          student={studentToDeactivate}
+        />
+      ) : null}
     </main>
+  )
+}
+
+function DeactivateStudentDialog({
+  student,
+  isSubmitting,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  student: Student
+  isSubmitting: boolean
+  error: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !isSubmitting) onCancel()
+    }
+
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [isSubmitting, onCancel])
+
+  return (
+    <div className="modal-backdrop" onMouseDown={() => !isSubmitting && onCancel()}>
+      <section
+        aria-describedby="deactivate-description"
+        aria-labelledby="deactivate-title"
+        aria-modal="true"
+        className="confirmation-modal"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="alertdialog"
+      >
+        <button aria-label="Fechar" className="modal-close" disabled={isSubmitting} onClick={onCancel} type="button">
+          <X size={19} />
+        </button>
+        <div className="modal-warning"><AlertTriangle size={26} /></div>
+        <div>
+          <p className="eyebrow">Confirmar desativacao</p>
+          <h2 id="deactivate-title">Desativar {student.name}?</h2>
+        </div>
+        <p id="deactivate-description">
+          Esta acao desativa o aluno para o seu acompanhamento. Ele sera movido para a lista de alunos inativos e podera ser ativado novamente quando necessario.
+        </p>
+        <strong>Tem certeza de que deseja desativar este aluno?</strong>
+        {error ? <p className="modal-error">{error}</p> : null}
+        <div className="modal-actions">
+          <button autoFocus className="secondary-button" disabled={isSubmitting} onClick={onCancel} type="button">Cancelar</button>
+          <button className="danger-button" disabled={isSubmitting} onClick={onConfirm} type="button">
+            <Power size={17} />
+            {isSubmitting ? 'Desativando...' : 'Desativar aluno'}
+          </button>
+        </div>
+      </section>
+    </div>
   )
 }
 
