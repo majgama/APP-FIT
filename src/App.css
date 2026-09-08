@@ -585,6 +585,16 @@ textarea {
   padding: 0 12px;
 }
 
+.form-grid select option {
+  color: #111827;
+  background: #f8fafc;
+}
+
+.form-grid select option:checked {
+  color: #ffffff;
+  background: #0d66d1;
+}
+
 .form-grid textarea,
 .standalone-note {
   min-height: 94px;
