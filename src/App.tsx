@@ -685,7 +685,7 @@ function App() {
                   </div>
                 </Panel>
 
-                <InvitePanel onCreateInvite={createStudentInvite} />
+                <InvitePanel onCreateInvite={createStudentInvite} personalName={currentUser?.name ?? 'Personal'} />
 
                 <Panel eyebrow="Novo cadastro" title="Cadastrar aluno">
                   <div className="form-grid">
@@ -764,7 +764,7 @@ function App() {
           {renderPageHeader('alunos')}
           {area === 'personal' ? (
             <section className="content-grid page-grid single-column">
-              <InvitePanel onCreateInvite={createStudentInvite} />
+              <InvitePanel onCreateInvite={createStudentInvite} personalName={currentUser?.name ?? 'Personal'} />
 
               <Panel id="alunos" eyebrow="Personal" title="Lista de alunos">
                 <div className="student-list">
@@ -1191,33 +1191,54 @@ function DeactivateStudentDialog({
   )
 }
 
-function InvitePanel({ onCreateInvite }: { onCreateInvite: () => Promise<GeneratedInvite | null> }) {
+function InvitePanel({ onCreateInvite, personalName }: { onCreateInvite: () => Promise<GeneratedInvite | null>; personalName?: string }) {
   const [invite, setInvite] = useState<GeneratedInvite | null>(null)
   const [message, setMessage] = useState('')
+  const isPersonalInvite = Boolean(personalName)
 
   useEffect(() => {
+    let isMounted = true
+
     void (async () => {
       const generatedInvite = await onCreateInvite()
-      if (!generatedInvite) return
+      if (!isMounted || !generatedInvite) return
       setInvite(generatedInvite)
-      setMessage('Link fixo do personal. Pode ser reutilizado em qualquer canal.')
+      setMessage(
+        isPersonalInvite
+          ? `Link fixo do personal. Pode ser reutilizado em qualquer canal.`
+          : 'Link pronto para compartilhar com alunos.',
+      )
     })()
-  }, [])
+
+    return () => {
+      isMounted = false
+    }
+  }, [isPersonalInvite])
 
   async function copyInvite() {
     if (!invite) return
 
-    const text = `Ola! Cadastre-se no APP-FIT pelo meu link: ${invite.url}`
+    const text = isPersonalInvite
+      ? `Cadastre-se no APP-FIT e comece seu plano com ${personalName}: ${invite.url}`
+      : `Ola! Cadastre-se no APP-FIT pelo meu link: ${invite.url}`
+
     await navigator.clipboard.writeText(text)
-    setMessage('Mensagem copiada.')
+    setMessage(isPersonalInvite ? 'Link do personal copiado.' : 'Mensagem copiada.')
   }
 
+  const whatsappText = isPersonalInvite
+    ? `Cadastre-se no APP-FIT e comece seu plano com ${personalName}: ${invite?.url ?? ''}`
+    : `Ola! Cadastre-se no APP-FIT pelo meu link: ${invite?.url ?? ''}`
+
   const whatsappUrl = invite
-    ? `https://wa.me/?text=${encodeURIComponent(`Ola! Cadastre-se no APP-FIT pelo meu link: ${invite.url}`)}`
+    ? `https://wa.me/?text=${encodeURIComponent(whatsappText)}`
     : ''
 
+  const panelTitle = isPersonalInvite ? 'Link do personal' : 'Link de cadastro do aluno'
+  const copyLabel = isPersonalInvite ? 'Copiar link do personal' : 'Copiar mensagem'
+
   return (
-    <Panel eyebrow="Convite" title="Link de cadastro do aluno">
+    <Panel eyebrow="Convite" title={panelTitle}>
       <div className="form-grid compact">
         {invite ? (
           <div className="invite-box">
@@ -1232,7 +1253,7 @@ function InvitePanel({ onCreateInvite }: { onCreateInvite: () => Promise<Generat
         {message ? <p className="form-message neutral-message">{message}</p> : null}
         <button className="secondary-button" disabled={!invite} onClick={copyInvite} type="button">
           <Copy size={18} />
-          Copiar mensagem
+          {copyLabel}
         </button>
         {invite ? (
           <a className="secondary-button link-button" href={whatsappUrl} rel="noreferrer" target="_blank">
