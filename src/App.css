@@ -549,6 +549,191 @@ textarea {
   grid-template-columns: 1.35fr 0.85fr;
 }
 
+.profile-page {
+  display: grid;
+  gap: 20px;
+}
+
+.profile-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 26px 28px;
+  border: 1px solid rgba(230, 197, 122, 0.18);
+  border-radius: 12px;
+  background: rgba(9, 17, 31, 0.78);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.14);
+}
+
+.profile-heading h1 {
+  margin: 0;
+  font-size: clamp(1.7rem, 2vw, 2.4rem);
+}
+
+.profile-heading p:last-child {
+  margin-top: 8px;
+  color: #aab6cb;
+}
+
+.profile-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(244, 200, 106, 0.38);
+  border-radius: 999px;
+  color: #fff2c4;
+  background: rgba(244, 200, 106, 0.08);
+  font-weight: 800;
+}
+
+.profile-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 20px;
+}
+
+.profile-section {
+  display: grid;
+  gap: 20px;
+  padding: 22px;
+  border: 1px solid rgba(230, 197, 122, 0.18);
+  border-radius: 12px;
+  background: rgba(9, 17, 31, 0.78);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.14);
+}
+
+.profile-photo-area {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.profile-photo-preview {
+  width: 110px;
+  height: 110px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 2px solid rgba(244, 200, 106, 0.45);
+  border-radius: 50%;
+  background: linear-gradient(145deg, rgba(13, 102, 209, 0.4), rgba(244, 200, 106, 0.12));
+}
+
+.profile-photo-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-photo-preview span {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: #f7f8fc;
+}
+
+.profile-photo-area strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #ffffff;
+}
+
+.profile-photo-area small {
+  display: block;
+  color: #aab6cb;
+}
+
+.profile-photo-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.profile-upload-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.profile-upload-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.profile-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.field-label {
+  display: grid;
+  gap: 7px;
+  color: #c8d2e3;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.field-label input,
+.field-label select,
+.field-label textarea {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #f7f8fc;
+  background: rgba(255, 255, 255, 0.07);
+  outline: none;
+  padding: 0 12px;
+}
+
+.field-label textarea {
+  min-height: 96px;
+  padding: 12px;
+  resize: vertical;
+}
+
+.field-label input:focus,
+.field-label select:focus,
+.field-label textarea:focus {
+  border-color: rgba(244, 200, 106, 0.64);
+}
+
+.profile-submit {
+  justify-self: start;
+}
+
+.password-section {
+  align-content: start;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.section-title > span {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  color: #06101c;
+  background: linear-gradient(135deg, #f7d57e, #c99737);
+}
+
+.section-title h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
 .panel {
   padding: 22px;
 }
@@ -899,7 +1084,8 @@ textarea {
   .topbar,
   .content-grid,
   .content-grid.wide-first,
-  .hero-panel {
+  .hero-panel,
+  .profile-layout {
     grid-template-columns: 1fr;
   }
 
@@ -910,6 +1096,11 @@ textarea {
 
   .metrics-grid {
     grid-template-columns: 1fr;
+  }
+
+  .profile-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
@@ -938,12 +1129,18 @@ textarea {
   .photo-slots,
   .guidance-grid,
   .admin-grid,
-  .two-fields {
+  .two-fields,
+  .profile-fields {
     grid-template-columns: 1fr;
   }
 
   .exercise-row {
     grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .profile-photo-area {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .media-pills,
