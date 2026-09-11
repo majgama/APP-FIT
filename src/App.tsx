@@ -602,7 +602,15 @@ function App() {
               <button className="icon-button" type="button" aria-label="Abrir mensagens">
                 <MessageCircle size={19} aria-hidden="true" />
               </button>
-              <button className="primary-button" type="button">
+              <button
+                className="primary-button"
+                onClick={() => {
+                  setActiveView('avaliacoes')
+                  setIsMobileMenuOpen(false)
+                  window.setTimeout(() => document.getElementById('avaliacoes')?.scrollIntoView({ behavior: 'smooth' }), 0)
+                }}
+                type="button"
+              >
                 <FilePlus2 size={18} aria-hidden="true" />
                 Novo registro
               </button>

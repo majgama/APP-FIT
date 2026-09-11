@@ -53,8 +53,8 @@ addMissingColumns('users', [
 ])
 
 addMissingColumns('trainers', [
-  ['invite_token', 'ALTER TABLE trainers ADD COLUMN invite_token TEXT UNIQUE'],
-  ['invite_url', 'ALTER TABLE trainers ADD COLUMN invite_url TEXT UNIQUE'],
+  ['invite_token', 'ALTER TABLE trainers ADD COLUMN invite_token TEXT'],
+  ['invite_url', 'ALTER TABLE trainers ADD COLUMN invite_url TEXT'],
 ])
 
 addMissingColumns('workout_templates', [
