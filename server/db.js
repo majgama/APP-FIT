@@ -52,6 +52,11 @@ addMissingColumns('users', [
   ['profile_photo_path', 'ALTER TABLE users ADD COLUMN profile_photo_path TEXT'],
 ])
 
+addMissingColumns('trainers', [
+  ['invite_token', 'ALTER TABLE trainers ADD COLUMN invite_token TEXT UNIQUE'],
+  ['invite_url', 'ALTER TABLE trainers ADD COLUMN invite_url TEXT UNIQUE'],
+])
+
 addMissingColumns('workout_templates', [
   ['created_by_user_id', 'ALTER TABLE workout_templates ADD COLUMN created_by_user_id INTEGER'],
   ['visibility', "ALTER TABLE workout_templates ADD COLUMN visibility TEXT NOT NULL DEFAULT 'platform'"],

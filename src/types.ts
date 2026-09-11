@@ -19,6 +19,8 @@ export type UserProfile = {
   role: Area
   crefNumber: string
   profilePhoto?: string
+  inviteUrl?: string
+  inviteCode?: string
 }
 
 export type RegisterUserInput = {

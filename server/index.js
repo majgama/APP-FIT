@@ -94,6 +94,36 @@ function ensureTrainerForUser(userId) {
   return getTrainerByUserId(userId)
 }
 
+function ensurePersonalInviteLink(userId, request) {
+  const trainer = getTrainerByUserId(userId)
+  if (!trainer) return null
+
+  const existing = db
+    .prepare('SELECT invite_token AS token, invite_url AS url FROM trainers WHERE id = ?')
+    .get(trainer.id)
+
+  if (existing?.url && existing.token) {
+    return {
+      code: existing.token.slice(0, 8).toUpperCase(),
+      token: existing.token,
+      url: existing.url,
+      expiresAt: null,
+    }
+  }
+
+  const token = randomBytes(12).toString('hex')
+  const url = `${getBaseUrl(request)}/?invite=${token}`
+
+  db.prepare('UPDATE trainers SET invite_token = ?, invite_url = ? WHERE id = ?').run(token, url, trainer.id)
+
+  return {
+    code: token.slice(0, 8).toUpperCase(),
+    token,
+    url,
+    expiresAt: null,
+  }
+}
+
 function canAccessStudent(user, studentId, includeInactive = true) {
   if (user.role === 'admin') return true
 
@@ -245,14 +275,22 @@ function getUserProfile(userId) {
   const profile = db.prepare(
     `SELECT users.id, users.name, users.email, COALESCE(users.birth_date, '') AS birthDate,
       COALESCE(users.profile_photo_path, '') AS profilePhotoPath,
-      user_roles.name AS role, COALESCE(trainers.registration_code, '') AS crefNumber
+      user_roles.name AS role, COALESCE(trainers.registration_code, '') AS crefNumber,
+      COALESCE(trainers.invite_url, '') AS inviteUrl,
+      COALESCE(trainers.invite_token, '') AS inviteToken
      FROM users
      JOIN user_roles ON user_roles.id = users.role_id
      LEFT JOIN trainers ON trainers.user_id = users.id
      WHERE users.id = ?`,
   ).get(userId)
   if (!profile) return null
-  return { ...profile, profilePhoto: profilePhotoData(profile.profilePhotoPath), profilePhotoPath: undefined }
+  return {
+    ...profile,
+    profilePhoto: profilePhotoData(profile.profilePhotoPath),
+    profilePhotoPath: undefined,
+    inviteUrl: profile.inviteUrl || '',
+    inviteCode: profile.inviteToken ? profile.inviteToken.slice(0, 8).toUpperCase() : '',
+  }
 }
 
 const weekDays = [
@@ -390,7 +428,7 @@ function getBaseUrl(request) {
 }
 
 function getInvitationByToken(token) {
-  return db
+  const invitation = db
     .prepare(
       `
       SELECT
@@ -408,6 +446,36 @@ function getInvitationByToken(token) {
       `,
     )
     .get(hashToken(token))
+
+  if (invitation) return invitation
+
+  const trainerInvite = db
+    .prepare(
+      `
+      SELECT
+        trainers.id AS trainerId,
+        trainers.invite_token AS token,
+        trainers.invite_url AS url,
+        trainer_users.name AS trainerName
+      FROM trainers
+      JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
+      WHERE trainers.invite_token = ?
+      `,
+    )
+    .get(token)
+
+  if (!trainerInvite) return null
+
+  return {
+    id: trainerInvite.trainerId,
+    email: null,
+    code: trainerInvite.token.slice(0, 8).toUpperCase(),
+    trainerId: trainerInvite.trainerId,
+    status: 'pending',
+    expiresAt: null,
+    trainerName: trainerInvite.trainerName,
+    url: trainerInvite.url,
+  }
 }
 
 function isInvitationUsable(invitation) {
@@ -596,6 +664,34 @@ app.get('/api/invitations/student/:token', (request, response) => {
   })
 })
 
+app.get('/api/personal/invite', (request, response) => {
+  const user = requireRole(request, response, ['personal'])
+  if (!user) return
+
+  const invite = ensurePersonalInviteLink(user.id, request)
+
+  if (!invite) {
+    response.status(400).json({ message: 'Personal nao encontrado.' })
+    return
+  }
+
+  response.json({ invite })
+})
+
+app.post('/api/personal/invite', (request, response) => {
+  const user = requireRole(request, response, ['personal'])
+  if (!user) return
+
+  const invite = ensurePersonalInviteLink(user.id, request)
+
+  if (!invite) {
+    response.status(400).json({ message: 'Personal nao encontrado.' })
+    return
+  }
+
+  response.status(201).json({ invite })
+})
+
 app.post('/api/auth/register', (request, response) => {
   const name = String(request.body?.name ?? '').trim()
   const email = String(request.body?.email ?? '').trim().toLowerCase()
@@ -653,6 +749,7 @@ app.post('/api/auth/register', (request, response) => {
 
     if (roleRecord.name === 'personal') {
       ensureTrainerForUser(user.id)
+      ensurePersonalInviteLink(user.id, request)
     }
 
     if (invitation) {

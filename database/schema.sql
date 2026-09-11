@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS trainers (
   registration_code TEXT,
   specialty TEXT,
   bio TEXT,
+  invite_token TEXT UNIQUE,
+  invite_url TEXT UNIQUE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );

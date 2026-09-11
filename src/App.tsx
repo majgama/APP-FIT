@@ -320,6 +320,16 @@ function App() {
 
 
   async function createStudentInvite() {
+    if (currentUser?.role === 'personal') {
+      try {
+        const data = await apiRequest('/api/personal/invite')
+        return data.invite as GeneratedInvite
+      } catch (error) {
+        alert((error as Error).message)
+        return null
+      }
+    }
+
     return apiRequest('/api/invitations/student', { method: 'POST' })
       .then((data) => data.invitation as GeneratedInvite)
       .catch((error) => {
@@ -1190,9 +1200,9 @@ function InvitePanel({ onCreateInvite }: { onCreateInvite: () => Promise<Generat
       const generatedInvite = await onCreateInvite()
       if (!generatedInvite) return
       setInvite(generatedInvite)
-      setMessage('Link pronto para enviar no WhatsApp.')
+      setMessage('Link fixo do personal. Pode ser reutilizado em qualquer canal.')
     })()
-  }, [onCreateInvite])
+  }, [])
 
   async function copyInvite() {
     if (!invite) return
