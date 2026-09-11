@@ -418,8 +418,8 @@ function isInvitationUsable(invitation) {
 }
 
 function createStudentInvite({ request, invitedByUserId, trainerId, email }) {
-  const token = randomBytes(32).toString('hex')
-  const code = randomBytes(4).toString('hex').toUpperCase()
+  const token = randomBytes(5).toString('hex').slice(0, 10).toUpperCase()
+  const code = token
   const role = db.prepare("SELECT id FROM user_roles WHERE name = 'aluno'").get()
   const expiresAt = toSqlDateTime(new Date(Date.now() + 1000 * 60 * 60 * 24 * 14))
 
@@ -578,7 +578,7 @@ app.post('/api/auth/login', (request, response) => {
 })
 
 app.get('/api/invitations/student/:token', (request, response) => {
-  const token = String(request.params.token ?? '')
+  const token = String(request.params.token ?? '').trim().toUpperCase()
   const invitation = getInvitationByToken(token)
 
   if (!isInvitationUsable(invitation)) {
@@ -761,8 +761,10 @@ app.get('/api/students/me', (request, response) => {
         students.status AS linkStatus,
         0 AS adherence,
         'Agendar' AS nextReview,
+        COALESCE(users.profile_photo_path, '') AS photoPath,
         COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers
       FROM students
+      LEFT JOIN users ON users.id = students.user_id
       LEFT JOIN student_trainers ON student_trainers.student_id = students.id
         AND student_trainers.is_active = 1
         AND student_trainers.ended_at IS NULL
@@ -774,7 +776,7 @@ app.get('/api/students/me', (request, response) => {
     )
     .get(user.id)
 
-  response.json({ student: student ?? null })
+  response.json({ student: student ? { ...student, photo: profilePhotoData(student.photoPath || ''), photoPath: undefined } : null })
 })
 
 app.get('/api/students', (request, response) => {
@@ -788,34 +790,47 @@ app.get('/api/students', (request, response) => {
     return
   }
 
+  const queryBuilder = (selectClause, whereClause, params) => {
+    const rows = db.prepare(`
+      ${selectClause}
+      FROM students
+      LEFT JOIN users ON users.id = students.user_id
+      LEFT JOIN student_trainers ON student_trainers.student_id = students.id
+        AND student_trainers.is_active = 1
+        AND student_trainers.ended_at IS NULL
+      LEFT JOIN trainers ON trainers.id = student_trainers.trainer_id
+      LEFT JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
+      ${whereClause}
+      GROUP BY students.id
+      ORDER BY students.name
+    `).all(...params)
+
+    return rows.map((student) => ({
+      ...student,
+      photo: profilePhotoData(student.photoPath || ''),
+      trainers: student.trainers ?? '',
+      photoPath: undefined,
+    }))
+  }
+
   if (user.role === 'admin') {
     const whereClause = status === 'all' ? '' : 'WHERE students.status = ?'
     const params = status === 'all' ? [] : [status]
-    const students = db
-      .prepare(
-        `
-        SELECT
-          students.id,
-          students.name,
-          COALESCE(students.goal, '') AS goal,
-          COALESCE(students.start_date, '') AS start,
-          COALESCE(students.restrictions, '') AS restrictions,
-          students.status AS linkStatus,
-          0 AS adherence,
-          'Agendar' AS nextReview,
-          COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers
-        FROM students
-        LEFT JOIN student_trainers ON student_trainers.student_id = students.id
-          AND student_trainers.is_active = 1
-          AND student_trainers.ended_at IS NULL
-        LEFT JOIN trainers ON trainers.id = student_trainers.trainer_id
-        LEFT JOIN users AS trainer_users ON trainer_users.id = trainers.user_id
-        ${whereClause}
-        GROUP BY students.id
-        ORDER BY students.name
-        `,
-      )
-      .all(...params)
+    const students = queryBuilder(
+      `SELECT
+        students.id,
+        students.name,
+        COALESCE(students.goal, '') AS goal,
+        COALESCE(students.start_date, '') AS start,
+        COALESCE(students.restrictions, '') AS restrictions,
+        students.status AS linkStatus,
+        0 AS adherence,
+        'Agendar' AS nextReview,
+        COALESCE(users.profile_photo_path, '') AS photoPath,
+        COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers`,
+      whereClause,
+      params,
+    )
 
     response.json({ students })
     return
@@ -843,11 +858,13 @@ app.get('/api/students', (request, response) => {
         COALESCE(own_link.inactive_reason, '') AS inactiveReason,
         0 AS adherence,
         'Agendar' AS nextReview,
+        COALESCE(users.profile_photo_path, '') AS photoPath,
         COALESCE(GROUP_CONCAT(DISTINCT trainer_users.name), '') AS trainers
       FROM students
       JOIN student_trainers AS own_link ON own_link.student_id = students.id
         AND own_link.trainer_id = ?
         ${statusClause}
+      LEFT JOIN users ON users.id = students.user_id
       LEFT JOIN student_trainers AS visible_links ON visible_links.student_id = students.id
         AND visible_links.is_active = 1
         AND visible_links.ended_at IS NULL
@@ -858,6 +875,7 @@ app.get('/api/students', (request, response) => {
       `,
     )
     .all(...params)
+    .map((student) => ({ ...student, photo: profilePhotoData(student.photoPath || ''), trainers: student.trainers ?? '', photoPath: undefined }))
 
   response.json({ students })
 })

@@ -39,6 +39,7 @@ export type Student = {
   trainers?: string
   linkStatus?: 'active' | 'inactive'
   inactiveReason?: string
+  photo?: string
 }
 
 export type Exercise = {

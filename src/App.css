@@ -592,6 +592,30 @@ textarea {
   transition: transform 160ms ease, background-color 160ms ease;
 }
 
+.student-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.student-avatar {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border: 2px solid rgba(244, 200, 106, 0.5);
+  border-radius: 50%;
+}
+
+.student-avatar.placeholder {
+  display: grid;
+  place-items: center;
+  color: #06101c;
+  font-weight: 800;
+  background: linear-gradient(135deg, #f7d57e, #c99737);
+}
+
 .student-row {
   display: flex;
   align-items: center;

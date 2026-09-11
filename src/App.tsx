@@ -12,7 +12,6 @@ import {
   FilePlus2,
   HeartPulse,
   LineChart,
-  Link2,
   LogOut,
   LockKeyhole,
   MessageCircle,
@@ -210,6 +209,7 @@ function App() {
       .then((user) => {
         setCurrentUser(user)
         setArea(user.role)
+        setActiveView(user.role === 'personal' ? 'alunos' : 'dashboard')
         fetchAppData(savedToken, user.role)
       })
       .catch(() => localStorage.removeItem('app-fit-auth-token'))
@@ -256,6 +256,7 @@ function App() {
     localStorage.setItem('app-fit-auth-token', data.token)
     setCurrentUser(user)
     setArea(user.role)
+    setActiveView(user.role === 'personal' ? 'alunos' : 'dashboard')
     fetchAppData(data.token, user.role)
     return ''
   }
@@ -276,6 +277,7 @@ function App() {
     localStorage.setItem('app-fit-auth-token', data.token)
     setCurrentUser(newUser)
     setArea(newUser.role)
+    setActiveView(newUser.role === 'personal' ? 'alunos' : 'dashboard')
     fetchAppData(data.token, newUser.role)
     return ''
   }
@@ -752,46 +754,62 @@ function App() {
           {renderPageHeader('alunos')}
           {area === 'personal' ? (
             <section className="content-grid page-grid single-column">
+              <InvitePanel onCreateInvite={createStudentInvite} />
+
               <Panel id="alunos" eyebrow="Personal" title="Lista de alunos">
                 <div className="student-list">
-                  {students.map((student) => (
-                    <div
-                      className={student.name === activeStudent.name ? 'student-row active' : 'student-row'}
-                      key={student.name}
-                      onClick={() => openStudentFolder(student.name)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') openStudentFolder(student.name)
-                      }}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <span>
-                        <strong>{student.name}</strong>
-                        <small>{student.trainers ? student.goal + ' - ' + student.trainers : student.goal}</small>
-                      </span>
-                      <span className="student-actions">
-                        <b>{student.adherence}%</b>
-                        {student.id ? (
-                          <button
-                            aria-label="Inativar aluno"
-                            className="mini-icon-button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setDeactivationError('')
-                              setStudentToDeactivate(student)
-                            }}
-                            type="button"
-                          >
-                            <Power size={15} />
-                          </button>
-                        ) : null}
-                      </span>
-                    </div>
-                  ))}
+                  {students.map((student) => {
+                    const initials = student.name
+                      .split(' ')
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .map((part) => part[0]?.toUpperCase() ?? '')
+                      .join('') || 'A'
+
+                    return (
+                      <div
+                        className={student.name === activeStudent.name ? 'student-row active' : 'student-row'}
+                        key={student.name}
+                        onClick={() => openStudentFolder(student.name)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') openStudentFolder(student.name)
+                        }}
+                        role="button"
+                        tabIndex={0}
+                      >
+                        <div className="student-identity">
+                          {student.photo ? (
+                            <img alt={student.name} className="student-avatar" src={student.photo} />
+                          ) : (
+                            <span className="student-avatar placeholder">{initials}</span>
+                          )}
+                          <span>
+                            <strong>{student.name}</strong>
+                            <small>{student.trainers ? student.goal + ' - ' + student.trainers : student.goal}</small>
+                          </span>
+                        </div>
+                        <span className="student-actions">
+                          <b>{student.adherence}%</b>
+                          {student.id ? (
+                            <button
+                              aria-label="Inativar aluno"
+                              className="mini-icon-button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setDeactivationError('')
+                                setStudentToDeactivate(student)
+                              }}
+                              type="button"
+                            >
+                              <Power size={15} />
+                            </button>
+                          ) : null}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               </Panel>
-
-              <InvitePanel onCreateInvite={createStudentInvite} />
 
               <Panel eyebrow="Novo cadastro" title="Cadastrar aluno">
                 <div className="form-grid">
@@ -1167,13 +1185,14 @@ function InvitePanel({ onCreateInvite }: { onCreateInvite: () => Promise<Generat
   const [invite, setInvite] = useState<GeneratedInvite | null>(null)
   const [message, setMessage] = useState('')
 
-  async function createInvite() {
-    const generatedInvite = await onCreateInvite()
-    if (!generatedInvite) return
-
-    setInvite(generatedInvite)
-    setMessage('Link pronto para enviar no WhatsApp.')
-  }
+  useEffect(() => {
+    void (async () => {
+      const generatedInvite = await onCreateInvite()
+      if (!generatedInvite) return
+      setInvite(generatedInvite)
+      setMessage('Link pronto para enviar no WhatsApp.')
+    })()
+  }, [onCreateInvite])
 
   async function copyInvite() {
     if (!invite) return
@@ -1188,19 +1207,19 @@ function InvitePanel({ onCreateInvite }: { onCreateInvite: () => Promise<Generat
     : ''
 
   return (
-    <Panel eyebrow="Convite" title="Enviar link para aluno">
+    <Panel eyebrow="Convite" title="Link de cadastro do aluno">
       <div className="form-grid compact">
         {invite ? (
           <div className="invite-box">
             <span>Codigo {invite.code}</span>
             <strong>{invite.url}</strong>
           </div>
-        ) : null}
+        ) : (
+          <div className="invite-box loading-invite">
+            <span>Gerando link...</span>
+          </div>
+        )}
         {message ? <p className="form-message neutral-message">{message}</p> : null}
-        <button className="primary-button" onClick={createInvite} type="button">
-          <Link2 size={18} />
-          Gerar link
-        </button>
         <button className="secondary-button" disabled={!invite} onClick={copyInvite} type="button">
           <Copy size={18} />
           Copiar mensagem
