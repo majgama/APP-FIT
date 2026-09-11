@@ -69,7 +69,7 @@ function App() {
   )
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null)
   const [area, setArea] = useState<Area>('personal')
-  const [activeView, setActiveView] = useState<'dashboard' | 'profile'>('dashboard')
+  const [activeView, setActiveView] = useState<'dashboard' | 'alunos' | 'treinos' | 'dietas' | 'avaliacoes' | 'admin' | 'profile'>('dashboard')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [profileLoading, setProfileLoading] = useState(false)
@@ -501,6 +501,7 @@ function App() {
 
   function openStudentFolder(studentName: string) {
     setSelectedStudent(studentName)
+    setActiveView('avaliacoes')
     setIsMobileMenuOpen(false)
     window.setTimeout(() => document.getElementById('avaliacoes')?.scrollIntoView({ behavior: 'smooth' }), 0)
   }
@@ -542,180 +543,215 @@ function App() {
     )
   }
 
-  return (
-    <main className="app-shell">
-      <button
-        aria-label={isMobileMenuOpen ? 'Fechar menu' : 'Abrir menu'}
-        className={`mobile-menu-toggle ${isMobileMenuOpen ? 'active' : ''}`}
-        onClick={() => setIsMobileMenuOpen((value) => !value)}
-        type="button"
-      >
-        <span />
-        <span />
-        <span />
-      </button>
+  const renderCurrentView = () => {
+    const pageTitles = {
+      dashboard: { eyebrow: `Area ${area}`, title: area === 'aluno' ? 'Acompanhe seu plano e registre sua evolucao.' : 'Gerencie alunos, treinos, dietas e evolucao em um so painel.' },
+      alunos: { eyebrow: 'Menu', title: 'Alunos' },
+      treinos: { eyebrow: 'Menu', title: 'Treinos' },
+      dietas: { eyebrow: 'Menu', title: 'Dietas' },
+      avaliacoes: { eyebrow: 'Menu', title: 'Avaliacoes' },
+      admin: { eyebrow: 'Menu', title: 'Admin' },
+      profile: { eyebrow: 'Perfil', title: 'Meu perfil' },
+    } as const
 
-      {isMobileMenuOpen ? <button aria-label="Fechar menu" className="mobile-backdrop" onClick={closeMobileMenu} type="button" /> : null}
-
-      <aside className={`sidebar ${isMobileMenuOpen ? 'open' : ''}`} aria-label="Navegacao principal">
-        <div className="brand-mark">
-          <span className="brand-number">JC</span>
-          <span>
-            <strong>Assessoria Fitness</strong>
-            <small>Biomecanica & performance</small>
-          </span>
+    const renderPageHeader = (view: keyof typeof pageTitles) => (
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">{pageTitles[view].eyebrow}</p>
+          <h2>{pageTitles[view].title}</h2>
         </div>
+      </header>
+    )
 
-        <div className="role-switch" aria-label="Selecionar area do app">
-          {(['personal', 'aluno', 'admin'] as Area[]).map((item) => (
-            <button
-              className={area === item ? 'active' : ''}
-              key={item}
-              onClick={() => {
-                setArea(item)
-                setIsMobileMenuOpen(false)
-              }}
-              disabled={currentUser.role !== 'admin' && currentUser.role !== item}
-              type="button"
-            >
-              {item === 'personal' ? <Dumbbell size={16} /> : null}
-              {item === 'aluno' ? <HeartPulse size={16} /> : null}
-              {item === 'admin' ? <LockKeyhole size={16} /> : null}
-              {item}
-            </button>
-          ))}
-        </div>
-
-        <nav className="nav-list">
-          <a className={activeView === 'dashboard' ? 'active' : ''} href="#dashboard" onClick={() => {
-            setActiveView('dashboard')
-            setIsMobileMenuOpen(false)
-          }}>
-            <LineChart size={18} aria-hidden="true" />
-            Dashboard
-          </a>
-          <a href="#alunos" onClick={() => {
-            setActiveView('dashboard')
-            setIsMobileMenuOpen(false)
-          }}>
-            <Users size={18} aria-hidden="true" />
-            Alunos
-          </a>
-          <a href="#treinos" onClick={() => {
-            setActiveView('dashboard')
-            setIsMobileMenuOpen(false)
-          }}>
-            <Dumbbell size={18} aria-hidden="true" />
-            Treinos
-          </a>
-          <a href="#dietas" onClick={() => {
-            setActiveView('dashboard')
-            setIsMobileMenuOpen(false)
-          }}>
-            <Apple size={18} aria-hidden="true" />
-            Dietas
-          </a>
-          <a href="#avaliacoes" onClick={() => {
-            setActiveView('dashboard')
-            setIsMobileMenuOpen(false)
-          }}>
-            <Camera size={18} aria-hidden="true" />
-            Avaliacoes
-          </a>
-          <a href="#admin" onClick={() => {
-            setActiveView('dashboard')
-            setIsMobileMenuOpen(false)
-          }}>
-            <UserCog size={18} aria-hidden="true" />
-            Admin
-          </a>
-          <button className={activeView === 'profile' ? 'active' : ''} onClick={() => {
-            openProfile()
-            setIsMobileMenuOpen(false)
-          }} type="button">
-            <UserCog size={18} aria-hidden="true" />
-            Meu perfil
-          </button>
-        </nav>
-
-        <div className="coach-card">
-          {currentUser.profilePhoto ? <img className="coach-avatar" alt="Foto do perfil" src={currentUser.profilePhoto} /> : <ShieldCheck size={22} aria-hidden="true" />}
-          <strong>{currentUser.name}</strong>
-          <span>{currentUser.email}</span>
-          <button className="logout-button" onClick={() => {
-            logout()
-            setIsMobileMenuOpen(false)
-          }} type="button">
-            <LogOut size={16} />
-            Sair
-          </button>
-        </div>
-      </aside>
-
-      <section className="workspace" id="dashboard">
-        {activeView === 'profile' ? (
-          profileLoading || !userProfile ? <div className="profile-loading">Carregando perfil...</div> : (
+    if (activeView === 'profile') {
+      return (
+        <div className="page-shell">
+          {renderPageHeader('profile')}
+          {profileLoading || !userProfile ? <div className="profile-loading">Carregando perfil...</div> : (
             <ProfilePage
               onChangePassword={changePassword}
               onSave={updateProfile}
               profile={userProfile}
             />
-          )
-        ) : (
-          <>
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Area {area}</p>
-            <h1>{area === 'aluno' ? 'Acompanhe seu plano e registre sua evolucao.' : 'Gerencie alunos, treinos, dietas e evolucao em um so painel.'}</h1>
-          </div>
-          <div className="topbar-actions">
-            <button className="icon-button" type="button" aria-label="Abrir mensagens">
-              <MessageCircle size={19} aria-hidden="true" />
-            </button>
-            <button className="primary-button" type="button">
-              <FilePlus2 size={18} aria-hidden="true" />
-              Novo registro
-            </button>
-          </div>
-        </header>
+          )}
+        </div>
+      )
+    }
 
-        <section className="hero-panel" aria-label="Resumo da assessoria">
-          <div className="hero-content">
-            <div className="hero-badge">
-              <Activity size={16} aria-hidden="true" />
-              Consultoria on-line
+    if (activeView === 'dashboard') {
+      return (
+        <div className="page-shell">
+          <header className="topbar">
+            <div>
+              <p className="eyebrow">Area {area}</p>
+              <h1>{area === 'aluno' ? 'Acompanhe seu plano e registre sua evolucao.' : 'Gerencie alunos, treinos, dietas e evolucao em um so painel.'}</h1>
             </div>
-            <h2>Plano semanal, treino diario, dieta e avaliacao fisica integrados.</h2>
-            <p>
-              O personal cria modelos reaproveitaveis; o aluno executa o treino, marca os dias
-              realizados, envia duvidas e registra fotos, medidas e objetivo corporal.
-            </p>
-            <div className="hero-actions">
-              <a className="primary-button link-button" href="#alunos">
-                Abrir aluno
-                <ChevronRight size={18} aria-hidden="true" />
-              </a>
-              <a className="secondary-button link-button" href="#treinos">
-                <Play size={18} aria-hidden="true" />
-                Montar treino
-              </a>
+            <div className="topbar-actions">
+              <button className="icon-button" type="button" aria-label="Abrir mensagens">
+                <MessageCircle size={19} aria-hidden="true" />
+              </button>
+              <button className="primary-button" type="button">
+                <FilePlus2 size={18} aria-hidden="true" />
+                Novo registro
+              </button>
             </div>
-          </div>
-          <div className="hero-stat" aria-label="Indice de aderencia">
-            <span>{averageAdherence}%</span>
-            <small>Aderencia media da carteira ativa</small>
-          </div>
-        </section>
+          </header>
 
-        {area === 'personal' ? (
-          <>
-            <section className="metrics-grid" aria-label="Indicadores principais">
-              <Metric icon={Users} label="Alunos ativos" value={String(students.length)} detail="Carteira em acompanhamento" />
-              <Metric icon={ClipboardList} label="Inativos" value={String(inactiveStudents.length)} detail="Podem ser reativados" />
-              <Metric icon={CheckCircle2} label="Check-ins" value={`${averageAdherence}%`} detail="Media geral" />
-            </section>
+          <section className="hero-panel" aria-label="Resumo da assessoria">
+            <div className="hero-content">
+              <div className="hero-badge">
+                <Activity size={16} aria-hidden="true" />
+                Consultoria on-line
+              </div>
+              <h2>Plano semanal, treino diario, dieta e avaliacao fisica integrados.</h2>
+              <p>
+                O personal cria modelos reaproveitaveis; o aluno executa o treino, marca os dias
+                realizados, envia duvidas e registra fotos, medidas e objetivo corporal.
+              </p>
+              <div className="hero-actions">
+                <button className="primary-button" onClick={() => setActiveView('alunos')} type="button">
+                  Abrir aluno
+                  <ChevronRight size={18} aria-hidden="true" />
+                </button>
+                <button className="secondary-button" onClick={() => setActiveView('treinos')} type="button">
+                  <Play size={18} aria-hidden="true" />
+                  Montar treino
+                </button>
+              </div>
+            </div>
+            <div className="hero-stat" aria-label="Indice de aderencia">
+              <span>{averageAdherence}%</span>
+              <small>Aderencia media da carteira ativa</small>
+            </div>
+          </section>
 
-            <section className="content-grid">
+          {area === 'personal' ? (
+            <>
+              <section className="metrics-grid" aria-label="Indicadores principais">
+                <Metric icon={Users} label="Alunos ativos" value={String(students.length)} detail="Carteira em acompanhamento" />
+                <Metric icon={ClipboardList} label="Inativos" value={String(inactiveStudents.length)} detail="Podem ser reativados" />
+                <Metric icon={CheckCircle2} label="Check-ins" value={`${averageAdherence}%`} detail="Media geral" />
+              </section>
+
+              <section className="content-grid">
+                <Panel id="alunos" eyebrow="Personal" title="Lista de alunos">
+                  <div className="student-list">
+                    {students.map((student) => (
+                      <div
+                        className={student.name === activeStudent.name ? 'student-row active' : 'student-row'}
+                        key={student.name}
+                        onClick={() => openStudentFolder(student.name)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') openStudentFolder(student.name)
+                        }}
+                        role="button"
+                        tabIndex={0}
+                      >
+                        <span>
+                          <strong>{student.name}</strong>
+                          <small>{student.trainers ? student.goal + ' - ' + student.trainers : student.goal}</small>
+                        </span>
+                        <span className="student-actions">
+                          <b>{student.adherence}%</b>
+                          {student.id ? (
+                            <button
+                              aria-label="Inativar aluno"
+                              className="mini-icon-button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setDeactivationError('')
+                                setStudentToDeactivate(student)
+                              }}
+                              type="button"
+                            >
+                              <Power size={15} />
+                            </button>
+                          ) : null}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+
+                <InvitePanel onCreateInvite={createStudentInvite} />
+
+                <Panel eyebrow="Novo cadastro" title="Cadastrar aluno">
+                  <div className="form-grid">
+                    <input aria-label="Nome do aluno" placeholder="Nome do aluno" value={studentForm.name} onChange={(event) => setStudentForm({ ...studentForm, name: event.target.value })} />
+                    <input aria-label="Objetivo" placeholder="Objetivo" value={studentForm.goal} onChange={(event) => setStudentForm({ ...studentForm, goal: event.target.value })} />
+                    <input aria-label="Data de inicio" type="date" value={studentForm.start} onChange={(event) => setStudentForm({ ...studentForm, start: event.target.value })} />
+                    <input aria-label="Proxima avaliacao" type="date" value={studentForm.nextReview} onChange={(event) => setStudentForm({ ...studentForm, nextReview: event.target.value })} />
+                    <textarea aria-label="Restricoes" placeholder="Restricoes" value={studentForm.restrictions} onChange={(event) => setStudentForm({ ...studentForm, restrictions: event.target.value })} />
+                    <button className="primary-button" onClick={addStudent} type="button">
+                      <Plus size={18} />
+                      Salvar aluno
+                    </button>
+                  </div>
+                </Panel>
+
+                <Panel eyebrow="Alunos inativos" title="Consultar e reativar">
+                  <div className="student-list">
+                    {inactiveStudents.length ? inactiveStudents.map((student) => (
+                      <div className="student-row readonly inactive" key={student.id ?? student.name}>
+                        <span>
+                          <strong>{student.name}</strong>
+                          <small>{student.goal || student.inactiveReason || 'Aluno inativo para este personal'}</small>
+                        </span>
+                        <button
+                          className="mini-action"
+                          onClick={() => student.id ? updateStudentStatus(student.id, 'active') : null}
+                          type="button"
+                        >
+                          <Power size={15} />
+                          Ativar
+                        </button>
+                      </div>
+                    )) : <p className="empty-state">Nenhum aluno inativo.</p>}
+                  </div>
+                </Panel>
+              </section>
+            </>
+          ) : null}
+
+          {area === 'aluno' ? (
+            <StudentArea
+              activeStudent={activeStudent}
+              assessment={assessment}
+              setAssessment={setAssessment}
+              assessments={assessments}
+              bodyGoals={bodyGoals}
+              workoutPlans={workoutPlans}
+              onCompleteWorkoutPlan={completeWorkoutPlan}
+              dietPlans={dietPlans}
+              loading={folderLoading}
+              onSaveAssessment={saveAssessment}
+              studentDoubt={studentDoubt}
+              setStudentDoubt={setStudentDoubt}
+            />
+          ) : null}
+
+          {area === 'admin' ? (
+            <AdminArea
+              students={students}
+              exercises={exerciseCatalog}
+              trainers={trainers}
+              onLinkStudentTrainer={linkStudentToTrainer}
+              workoutLibrary={workoutLibrary}
+              onCreateExercise={createLibraryExercise}
+              onCreateDaily={createDailyTemplate}
+              onCreateWeekly={createWeeklyTemplate}
+            />
+          ) : null}
+        </div>
+      )
+    }
+
+    if (activeView === 'alunos') {
+      return (
+        <div className="page-shell">
+          {renderPageHeader('alunos')}
+          {area === 'personal' ? (
+            <section className="content-grid page-grid single-column">
               <Panel id="alunos" eyebrow="Personal" title="Lista de alunos">
                 <div className="student-list">
                   {students.map((student) => (
@@ -792,8 +828,32 @@ function App() {
                 </div>
               </Panel>
             </section>
+          ) : (
+            <StudentArea
+              activeStudent={activeStudent}
+              assessment={assessment}
+              setAssessment={setAssessment}
+              assessments={assessments}
+              bodyGoals={bodyGoals}
+              workoutPlans={workoutPlans}
+              onCompleteWorkoutPlan={completeWorkoutPlan}
+              dietPlans={dietPlans}
+              loading={folderLoading}
+              onSaveAssessment={saveAssessment}
+              studentDoubt={studentDoubt}
+              setStudentDoubt={setStudentDoubt}
+            />
+          )}
+        </div>
+      )
+    }
 
-            <section className="content-grid wide-first">
+    if (activeView === 'treinos') {
+      return (
+        <div className="page-shell">
+          {renderPageHeader('treinos')}
+          {area === 'personal' ? (
+            <section className="content-grid page-grid wide-first">
               <Panel id="treinos" eyebrow="Treino" title="Plano semanal e treino diario">
                 <div className="week-grid">
                   {weeklyPlan.map((day) => (
@@ -825,46 +885,82 @@ function App() {
                 <ExerciseForm exerciseForm={exerciseForm} setExerciseForm={setExerciseForm} addExercise={addExercise} />
               </Panel>
             </section>
-
-            <StudentFolder
+          ) : (
+            <StudentArea
               activeStudent={activeStudent}
               assessment={assessment}
               setAssessment={setAssessment}
               assessments={assessments}
               bodyGoals={bodyGoals}
               workoutPlans={workoutPlans}
-              workoutLibrary={workoutLibrary}
+              onCompleteWorkoutPlan={completeWorkoutPlan}
               dietPlans={dietPlans}
               loading={folderLoading}
-              canCreatePlans
               onSaveAssessment={saveAssessment}
-              onSaveWorkoutPlan={saveWorkoutPlan}
-              onSaveDietPlan={saveDietPlan}
-              onCreateExercise={createLibraryExercise}
-              onCreateDaily={createDailyTemplate}
-              onCreateWeekly={createWeeklyTemplate}
+              studentDoubt={studentDoubt}
+              setStudentDoubt={setStudentDoubt}
             />
-          </>
-        ) : null}
+          )}
+        </div>
+      )
+    }
 
-        {area === 'aluno' ? (
-          <StudentArea
+    if (activeView === 'dietas') {
+      return (
+        <div className="page-shell">
+          {renderPageHeader('dietas')}
+          <StudentFolder
             activeStudent={activeStudent}
             assessment={assessment}
             setAssessment={setAssessment}
             assessments={assessments}
             bodyGoals={bodyGoals}
             workoutPlans={workoutPlans}
-            onCompleteWorkoutPlan={completeWorkoutPlan}
+            workoutLibrary={workoutLibrary}
             dietPlans={dietPlans}
             loading={folderLoading}
+            canCreatePlans
             onSaveAssessment={saveAssessment}
-            studentDoubt={studentDoubt}
-            setStudentDoubt={setStudentDoubt}
+            onSaveWorkoutPlan={saveWorkoutPlan}
+            onSaveDietPlan={saveDietPlan}
+            onCreateExercise={createLibraryExercise}
+            onCreateDaily={createDailyTemplate}
+            onCreateWeekly={createWeeklyTemplate}
           />
-        ) : null}
+        </div>
+      )
+    }
 
-        {area === 'admin' ? (
+    if (activeView === 'avaliacoes') {
+      return (
+        <div className="page-shell">
+          {renderPageHeader('avaliacoes')}
+          <StudentFolder
+            activeStudent={activeStudent}
+            assessment={assessment}
+            setAssessment={setAssessment}
+            assessments={assessments}
+            bodyGoals={bodyGoals}
+            workoutPlans={workoutPlans}
+            workoutLibrary={workoutLibrary}
+            dietPlans={dietPlans}
+            loading={folderLoading}
+            canCreatePlans
+            onSaveAssessment={saveAssessment}
+            onSaveWorkoutPlan={saveWorkoutPlan}
+            onSaveDietPlan={saveDietPlan}
+            onCreateExercise={createLibraryExercise}
+            onCreateDaily={createDailyTemplate}
+            onCreateWeekly={createWeeklyTemplate}
+          />
+        </div>
+      )
+    }
+
+    if (activeView === 'admin') {
+      return (
+        <div className="page-shell">
+          {renderPageHeader('admin')}
           <AdminArea
             students={students}
             exercises={exerciseCatalog}
@@ -875,9 +971,126 @@ function App() {
             onCreateDaily={createDailyTemplate}
             onCreateWeekly={createWeeklyTemplate}
           />
-        ) : null}
-          </>
-        )}
+        </div>
+      )
+    }
+
+    return null
+  }
+
+  return (
+    <main className="app-shell">
+      <button
+        aria-label={isMobileMenuOpen ? 'Fechar menu' : 'Abrir menu'}
+        className={`mobile-menu-toggle ${isMobileMenuOpen ? 'active' : ''}`}
+        onClick={() => setIsMobileMenuOpen((value) => !value)}
+        type="button"
+      >
+        <span />
+        <span />
+        <span />
+      </button>
+
+      {isMobileMenuOpen ? <button aria-label="Fechar menu" className="mobile-backdrop" onClick={closeMobileMenu} type="button" /> : null}
+
+      <aside className={`sidebar ${isMobileMenuOpen ? 'open' : ''}`} aria-label="Navegacao principal">
+        <div className="brand-mark">
+          <span className="brand-number">JC</span>
+          <span>
+            <strong>Assessoria Fitness</strong>
+            <small>Biomecanica & performance</small>
+          </span>
+        </div>
+
+        <div className="role-switch" aria-label="Selecionar area do app">
+          {(['personal', 'aluno', 'admin'] as Area[]).map((item) => (
+            <button
+              className={area === item ? 'active' : ''}
+              key={item}
+              onClick={() => {
+                setArea(item)
+                setActiveView('dashboard')
+                setIsMobileMenuOpen(false)
+              }}
+              disabled={currentUser.role !== 'admin' && currentUser.role !== item}
+              type="button"
+            >
+              {item === 'personal' ? <Dumbbell size={16} /> : null}
+              {item === 'aluno' ? <HeartPulse size={16} /> : null}
+              {item === 'admin' ? <LockKeyhole size={16} /> : null}
+              {item}
+            </button>
+          ))}
+        </div>
+
+        <nav className="nav-list">
+          <button className={activeView === 'dashboard' ? 'active' : ''} onClick={() => {
+            setActiveView('dashboard')
+            setIsMobileMenuOpen(false)
+          }} type="button">
+            <LineChart size={18} aria-hidden="true" />
+            Dashboard
+          </button>
+          <button className={activeView === 'alunos' ? 'active' : ''} onClick={() => {
+            setActiveView('alunos')
+            setIsMobileMenuOpen(false)
+          }} type="button">
+            <Users size={18} aria-hidden="true" />
+            Alunos
+          </button>
+          <button className={activeView === 'treinos' ? 'active' : ''} onClick={() => {
+            setActiveView('treinos')
+            setIsMobileMenuOpen(false)
+          }} type="button">
+            <Dumbbell size={18} aria-hidden="true" />
+            Treinos
+          </button>
+          <button className={activeView === 'dietas' ? 'active' : ''} onClick={() => {
+            setActiveView('dietas')
+            setIsMobileMenuOpen(false)
+          }} type="button">
+            <Apple size={18} aria-hidden="true" />
+            Dietas
+          </button>
+          <button className={activeView === 'avaliacoes' ? 'active' : ''} onClick={() => {
+            setActiveView('avaliacoes')
+            setIsMobileMenuOpen(false)
+          }} type="button">
+            <Camera size={18} aria-hidden="true" />
+            Avaliacoes
+          </button>
+          <button className={activeView === 'admin' ? 'active' : ''} onClick={() => {
+            setActiveView('admin')
+            setIsMobileMenuOpen(false)
+          }} type="button">
+            <UserCog size={18} aria-hidden="true" />
+            Admin
+          </button>
+          <button className={activeView === 'profile' ? 'active' : ''} onClick={() => {
+            openProfile()
+            setIsMobileMenuOpen(false)
+          }} type="button">
+            <UserCog size={18} aria-hidden="true" />
+            Meu perfil
+          </button>
+        </nav>
+
+        <div className="coach-card">
+          {currentUser.profilePhoto ? <img className="coach-avatar" alt="Foto do perfil" src={currentUser.profilePhoto} /> : <ShieldCheck size={22} aria-hidden="true" />}
+          <strong>{currentUser.name}</strong>
+          <span>{currentUser.email}</span>
+          <button className="logout-button" onClick={() => {
+            logout()
+            setIsMobileMenuOpen(false)
+          }} type="button">
+            <LogOut size={16} />
+            Sair
+          </button>
+        </div>
+      </aside>
+
+      <section className="workspace" id="dashboard">
+        {renderCurrentView()}
       </section>
 
       {studentToDeactivate ? (
