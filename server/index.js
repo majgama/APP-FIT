@@ -11,6 +11,8 @@ const port = Number(process.env.PORT ?? 3000)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const rootDir = join(__dirname, '..')
 const uploadDir = join(rootDir, 'data', 'uploads')
+const distDir = join(rootDir, 'dist')
+const hasProductionBuild = existsSync(distDir) && existsSync(join(distDir, 'index.html'))
 const maxExerciseVideoBytes = 8 * 1024 * 1024
 const maxExerciseAudioBytes = 3 * 1024 * 1024
 const maxProfilePhotoBytes = 3 * 1024 * 1024
@@ -18,6 +20,19 @@ const maxProfilePhotoBytes = 3 * 1024 * 1024
 mkdirSync(uploadDir, { recursive: true })
 
 app.use(express.json({ limit: '25mb' }))
+
+if (hasProductionBuild) {
+  app.use(express.static(distDir))
+
+  app.get(/^(?!\/api).*/, (request, response, next) => {
+    if (request.path.startsWith('/api')) {
+      next()
+      return
+    }
+
+    response.sendFile(join(distDir, 'index.html'))
+  })
+}
 
 function hashToken(token) {
   return createHash('sha256').update(token).digest('hex')

@@ -18,7 +18,25 @@ db.pragma('foreign_keys = ON')
 const schema = readFileSync(schemaPath, 'utf8')
 db.exec(schema)
 
-const existingInvitationColumns = db.prepare('PRAGMA table_info(invitations)').all().map((column) => column.name)
+function tableColumns(tableName) {
+  try {
+    return db.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name)
+  } catch {
+    return []
+  }
+}
+
+function runMigration(statement) {
+  try {
+    db.exec(statement)
+  } catch (error) {
+    const message = String(error?.message ?? '')
+    const isIgnorable = /duplicate column|Cannot add a UNIQUE column|already exists|duplicate column name/i.test(message)
+    if (!isIgnorable) throw error
+  }
+}
+
+const existingInvitationColumns = tableColumns('invitations')
 const invitationMigrations = [
   ['trainer_id', 'ALTER TABLE invitations ADD COLUMN trainer_id INTEGER'],
   ['accepted_student_id', 'ALTER TABLE invitations ADD COLUMN accepted_student_id INTEGER'],
@@ -26,19 +44,19 @@ const invitationMigrations = [
 ]
 
 for (const [column, statement] of invitationMigrations) {
-  if (!existingInvitationColumns.includes(column)) db.exec(statement)
+  if (!existingInvitationColumns.includes(column)) runMigration(statement)
 }
 
-const existingStudentTrainerColumns = db.prepare('PRAGMA table_info(student_trainers)').all().map((column) => column.name)
+const existingStudentTrainerColumns = tableColumns('student_trainers')
 
 if (!existingStudentTrainerColumns.includes('inactive_reason')) {
-  db.exec('ALTER TABLE student_trainers ADD COLUMN inactive_reason TEXT')
+  runMigration('ALTER TABLE student_trainers ADD COLUMN inactive_reason TEXT')
 }
 
 function addMissingColumns(tableName, migrations) {
-  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name)
+  const columns = tableColumns(tableName)
   for (const [column, statement] of migrations) {
-    if (!columns.includes(column)) db.exec(statement)
+    if (!columns.includes(column)) runMigration(statement)
   }
 }
 
