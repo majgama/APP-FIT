@@ -194,7 +194,7 @@ export async function saveWorkoutPlan(studentId: number, plan: { templateId: num
   })
 }
 
-export async function saveDietPlan(studentId: number, plan: { name: string; planDate: string; notes: string }) {
+export async function saveDietPlan(studentId: number, plan: { name: string; planDate: string; notes: string; meals: DietPlan['meals'] }) {
   return apiRequest(`/api/students/${studentId}/diet-plans`, {
     method: 'POST',
     body: JSON.stringify(plan),

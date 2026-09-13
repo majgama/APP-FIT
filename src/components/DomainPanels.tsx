@@ -25,6 +25,7 @@ import type {
   AssessmentPhoto,
   BodyGoal,
   DailyTemplate,
+  DietMeal,
   DietPlan,
   Exercise,
   LoadLevel,
@@ -383,13 +384,39 @@ export function DietPlanCreator({ onSaveDiet }: {
 }) {
   const today = new Date().toISOString().slice(0, 10)
   const [diet, setDiet] = useState({ name: '', planDate: today, notes: '' })
+  const [meals, setMeals] = useState<DietMeal[]>([])
   const [message, setMessage] = useState('')
+
+  function addMeal() {
+    setMeals((current) => [...current, { mealType: 'cafe da manha', amount: '', guidance: '', items: [] }])
+  }
+
+  function updateMeal(index: number, changes: Partial<DietMeal>) {
+    setMeals((current) => current.map((meal, mealIndex) => mealIndex === index ? { ...meal, ...changes } : meal))
+  }
+
+  function addMealItem(mealIndex: number) {
+    setMeals((current) => current.map((meal, index) => index === mealIndex
+      ? { ...meal, items: [...meal.items, { name: '', amount: '', notes: '' }] }
+      : meal))
+  }
+
+  function updateMealItem(mealIndex: number, itemIndex: number, field: 'name' | 'amount' | 'notes', value: string) {
+    setMeals((current) => current.map((meal, index) => index === mealIndex
+      ? { ...meal, items: meal.items.map((item, itemPosition) => itemPosition === itemIndex ? { ...item, [field]: value } : item) }
+      : meal))
+  }
 
   async function submitDiet() {
     if (!diet.name.trim()) return setMessage('Informe o nome do plano de dieta.')
-    const error = await onSaveDiet(diet)
+    if (!meals.length) return setMessage('Adicione pelo menos uma refeicao ao plano.')
+    if (meals.some((meal) => !meal.items.some((item) => item.name.trim()))) return setMessage('Informe pelo menos um alimento em cada refeicao.')
+    const error = await onSaveDiet({ ...diet, meals })
     setMessage(error || 'Plano de dieta aplicado.')
-    if (!error) setDiet({ name: '', planDate: today, notes: '' })
+    if (!error) {
+      setDiet({ name: '', planDate: today, notes: '' })
+      setMeals([])
+    }
   }
 
   return (
@@ -398,6 +425,26 @@ export function DietPlanCreator({ onSaveDiet }: {
       <input aria-label="Nome do plano de dieta" placeholder="Nome do plano" value={diet.name} onChange={(event) => setDiet({ ...diet, name: event.target.value })} />
       <input aria-label="Data do plano" type="date" value={diet.planDate} onChange={(event) => setDiet({ ...diet, planDate: event.target.value })} />
       <textarea aria-label="Orientacoes da dieta" placeholder="Refeicoes, quantidades e orientacoes" value={diet.notes} onChange={(event) => setDiet({ ...diet, notes: event.target.value })} />
+      <div className="diet-meal-builder">
+        {meals.map((meal, mealIndex) => (
+          <div className="diet-meal-row" key={`${meal.mealType}-${mealIndex}`}>
+            <select aria-label={`Horario da refeicao ${mealIndex + 1}`} value={meal.mealType} onChange={(event) => updateMeal(mealIndex, { mealType: event.target.value })}>
+              {['cafe da manha', 'lanche', 'almoco', 'lanche da tarde', 'janta', 'ceia', 'pre-treino', 'pos-treino', 'suplementacao'].map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+            <input aria-label={`Quantidade da refeicao ${mealIndex + 1}`} placeholder="Quantidade" value={meal.amount} onChange={(event) => updateMeal(mealIndex, { amount: event.target.value })} />
+            <input aria-label={`Orientacao da refeicao ${mealIndex + 1}`} placeholder="Orientacao" value={meal.guidance} onChange={(event) => updateMeal(mealIndex, { guidance: event.target.value })} />
+            {meal.items.map((item, itemIndex) => (
+              <div className="diet-food-row" key={`${mealIndex}-${itemIndex}`}>
+                <input aria-label="Alimento" placeholder="Alimento" value={item.name} onChange={(event) => updateMealItem(mealIndex, itemIndex, 'name', event.target.value)} />
+                <input aria-label="Quantidade do alimento" placeholder="Porcao" value={item.amount} onChange={(event) => updateMealItem(mealIndex, itemIndex, 'amount', event.target.value)} />
+                <input aria-label="Observacao do alimento" placeholder="Observacao" value={item.notes} onChange={(event) => updateMealItem(mealIndex, itemIndex, 'notes', event.target.value)} />
+              </div>
+            ))}
+            <button className="mini-action" onClick={() => addMealItem(mealIndex)} type="button"><Plus size={15} /> Alimento</button>
+          </div>
+        ))}
+        <button className="secondary-button" onClick={addMeal} type="button"><Plus size={17} /> Adicionar refeicao</button>
+      </div>
       <button className="primary-button" onClick={submitDiet} type="button"><Apple size={18} /> Aplicar dieta</button>
       {message ? <p className="form-message neutral-message">{message}</p> : null}
     </div>
@@ -427,6 +474,9 @@ export function PlansHistory({ workoutPlans, dietPlans }: { workoutPlans: Workou
               <Apple size={18} />
               <span><strong>{plan.name}</strong><small>{new Date(`${plan.planDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></span>
               <p>{plan.notes || 'Sem observacoes.'}</p>
+              {plan.meals?.length ? <div className="plan-meals">
+                {plan.meals.map((meal) => <span key={meal.id ?? meal.mealType}><b>{meal.mealType}</b>: {meal.items.map((item) => `${item.name}${item.amount ? ` (${item.amount})` : ''}`).join(', ')}</span>)}
+              </div> : null}
             </article>
           )) : <p className="empty-state">Nenhuma dieta aplicada.</p>}
         </div>

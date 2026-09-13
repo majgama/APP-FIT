@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url'
 import { db, toPublicUser } from './db.js'
 
 const app = express()
-const port = Number(process.env.PORT ?? 3000)
+const port = Number(process.env.PORT ?? 8080)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const rootDir = join(__dirname, '..')
-const uploadDir = join(rootDir, 'data', 'uploads')
+const uploadDir = process.env.UPLOAD_DIR ?? join(rootDir, 'data', 'uploads')
 const distDir = join(rootDir, 'dist')
 const hasProductionBuild = existsSync(distDir) && existsSync(join(distDir, 'index.html'))
 const maxExerciseVideoBytes = 8 * 1024 * 1024
@@ -419,6 +419,25 @@ function getAppliedPlanDays(planId) {
   )
 
   return days.map((day) => ({ ...day, exercises: exercises.all(day.id) }))
+}
+
+function getAppliedDietMeals(planId) {
+  const meals = db.prepare(
+    `SELECT id, meal_type AS mealType, COALESCE(amount, '') AS amount,
+      COALESCE(guidance_text, '') AS guidance
+     FROM meals
+     WHERE diet_plan_id = ?
+     ORDER BY sort_order, id`,
+  ).all(planId)
+  const items = db.prepare(
+    `SELECT id, meal_id AS mealId, name, COALESCE(amount, '') AS amount,
+      COALESCE(notes, '') AS notes
+     FROM meal_items
+     WHERE meal_id = ?
+     ORDER BY sort_order, id`,
+  )
+
+  return meals.map((meal) => ({ ...meal, items: items.all(meal.id) }))
 }
 
 function requireRole(request, response, allowedRoles) {
@@ -1617,7 +1636,7 @@ app.get('/api/students/:studentId/plans', (request, response) => {
 
   response.json({
     workouts: workouts.map((plan) => ({ ...plan, days: getAppliedPlanDays(plan.id) })),
-    diets,
+    diets: diets.map((plan) => ({ ...plan, meals: getAppliedDietMeals(plan.id) })),
   })
 })
 
@@ -1716,22 +1735,60 @@ app.post('/api/students/:studentId/diet-plans', (request, response) => {
   const name = String(request.body?.name ?? '').trim()
   const planDate = String(request.body?.planDate ?? new Date().toISOString().slice(0, 10)).trim()
   const notes = String(request.body?.notes ?? '').trim()
+  const submittedMeals = Array.isArray(request.body?.meals) ? request.body.meals : []
 
   if (!name) {
     response.status(400).json({ message: 'Informe o nome do plano de dieta.' })
     return
   }
 
-  const result = db
-    .prepare(
-      `
-      INSERT INTO diet_plans (student_id, trainer_id, name, plan_date, notes)
-      VALUES (?, ?, ?, ?, ?)
-      `,
-    )
-    .run(studentId, trainer?.id ?? null, name, planDate, notes)
+  const meals = submittedMeals
+    .map((meal) => ({
+      mealType: String(meal.mealType ?? '').trim(),
+      amount: String(meal.amount ?? '').trim(),
+      guidance: String(meal.guidance ?? '').trim(),
+      items: Array.isArray(meal.items) ? meal.items.map((item) => ({
+        name: String(item.name ?? '').trim(),
+        amount: String(item.amount ?? '').trim(),
+        notes: String(item.notes ?? '').trim(),
+      })).filter((item) => item.name) : [],
+    }))
+    .filter((meal) => meal.mealType && meal.items.length)
 
-  response.status(201).json({ plan: { id: result.lastInsertRowid, name, planDate, notes } })
+  if (!meals.length) {
+    response.status(400).json({ message: 'Adicione pelo menos uma refeicao com alimento.' })
+    return
+  }
+
+  const allowedMealTypes = ['cafe da manha', 'lanche', 'almoco', 'lanche da tarde', 'janta', 'ceia', 'pre-treino', 'pos-treino', 'suplementacao']
+  if (meals.some((meal) => !allowedMealTypes.includes(meal.mealType))) {
+    response.status(400).json({ message: 'Tipo de refeicao invalido.' })
+    return
+  }
+
+  const transaction = db.transaction(() => {
+    const result = db.prepare(
+      `INSERT INTO diet_plans (student_id, trainer_id, name, plan_date, notes)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(studentId, trainer?.id ?? null, name, planDate, notes)
+    const insertMeal = db.prepare(
+      `INSERT INTO meals (diet_plan_id, meal_type, amount, guidance_text, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    const insertItem = db.prepare(
+      `INSERT INTO meal_items (meal_id, name, amount, notes, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+
+    meals.forEach((meal, mealIndex) => {
+      const savedMeal = insertMeal.run(result.lastInsertRowid, meal.mealType, meal.amount, meal.guidance, mealIndex)
+      meal.items.forEach((item, itemIndex) => insertItem.run(savedMeal.lastInsertRowid, item.name, item.amount, item.notes, itemIndex))
+    })
+    return result.lastInsertRowid
+  })
+  const planId = transaction()
+
+  response.status(201).json({ plan: { id: planId, name, planDate, notes, meals: getAppliedDietMeals(planId) } })
 })
 
 app.get('/api/exercises', (request, response) => {
