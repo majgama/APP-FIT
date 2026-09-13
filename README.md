@@ -46,19 +46,6 @@ npm run build
 
 ## Observações
 
-- O projeto usa PostgreSQL como banco principal.
-- O servidor salva uploads em `/tmp/app-fit/uploads` por padrao. Esse armazenamento e temporario no App Platform.
-- A API expõe healthcheck em `/api/health`.
-
-## Configuração recomendada para DigitalOcean
-
-No App Platform, vincule o banco gerenciado ao app e configure:
-
-```bash
-PORT=8080
-DATABASE_URL=${dbappfit.DATABASE_URL}
-DATABASE_SSL=true
-UPLOAD_DIR=/tmp/app-fit/uploads
-```
-
-O nome `dbappfit` precisa ser exatamente o nome do recurso de banco vinculado ao app. Nao use uma URL de exemplo como `@base`, `@host` ou `@localhost`.
+- O banco SQLite é criado automaticamente em data/app-fit.db.
+- O servidor salva uploads em data/uploads.
+- A API expõe healthcheck em /api/health.

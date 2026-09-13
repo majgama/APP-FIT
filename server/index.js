@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url'
 import { db, toPublicUser } from './db.js'
 
 const app = express()
-const port = Number(process.env.PORT ?? 8080)
+const port = Number(process.env.PORT ?? 3000)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const rootDir = join(__dirname, '..')
-const uploadDir = process.env.UPLOAD_DIR ?? '/tmp/app-fit/uploads'
+const uploadDir = join(rootDir, 'data', 'uploads')
 const distDir = join(rootDir, 'dist')
 const hasProductionBuild = existsSync(distDir) && existsSync(join(distDir, 'index.html'))
 const maxExerciseVideoBytes = 8 * 1024 * 1024
