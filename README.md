@@ -47,7 +47,7 @@ npm run build
 ## Observações
 
 - O banco SQLite é criado automaticamente em data/app-fit.db.
-- O servidor salva uploads em data/uploads.
+- O servidor salva uploads em `/tmp/app-fit/uploads` por padrao. Esse armazenamento e temporario no App Platform.
 - A API expõe healthcheck em /api/health.
 
 ## Configuração recomendada para DigitalOcean
