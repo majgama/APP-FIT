@@ -175,20 +175,4 @@ export type DietPlan = {
   planDate: string
   notes: string
   createdAt?: string
-  meals: DietMeal[]
-}
-
-export type DietMealItem = {
-  id?: number
-  name: string
-  amount: string
-  notes: string
-}
-
-export type DietMeal = {
-  id?: number
-  mealType: string
-  amount: string
-  guidance: string
-  items: DietMealItem[]
 }
