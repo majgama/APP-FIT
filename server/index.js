@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { db, toPublicUser } from './db.js'
+import { databaseReady, db, toPublicUser } from './db.js'
 
 const app = express()
 const port = Number(process.env.PORT ?? 8080)
@@ -42,11 +42,11 @@ function toSqlDateTime(date) {
   return date.toISOString().slice(0, 19).replace('T', ' ')
 }
 
-function createSession(userId) {
+async function createSession(userId) {
   const token = randomBytes(32).toString('hex')
   const expiresAt = toSqlDateTime(new Date(Date.now() + 1000 * 60 * 60 * 24 * 30))
 
-  db.prepare(
+  await db.prepare(
     `
     INSERT INTO user_sessions (user_id, token_hash, expires_at)
     VALUES (?, ?, ?)
@@ -65,7 +65,7 @@ function getBearerToken(request) {
   return token
 }
 
-function getRequestUser(request) {
+async function getRequestUser(request) {
   const token = getBearerToken(request)
 
   if (!token) return null
@@ -86,8 +86,8 @@ function getRequestUser(request) {
     .get(hashToken(token))
 }
 
-function requireUser(request, response) {
-  const user = getRequestUser(request)
+async function requireUser(request, response) {
+  const user = await getRequestUser(request)
 
   if (!user) {
     response.status(401).json({ message: 'Sessao invalida ou expirada.' })
@@ -97,23 +97,23 @@ function requireUser(request, response) {
   return user
 }
 
-function getTrainerByUserId(userId) {
+async function getTrainerByUserId(userId) {
   return db.prepare('SELECT id, user_id AS userId FROM trainers WHERE user_id = ?').get(userId)
 }
 
-function ensureTrainerForUser(userId) {
-  db.prepare('INSERT OR IGNORE INTO trainers (user_id, specialty) VALUES (?, ?)').run(
+async function ensureTrainerForUser(userId) {
+  await db.prepare('INSERT OR IGNORE INTO trainers (user_id, specialty) VALUES (?, ?)').run(
     userId,
     'Assessoria fitness online',
   )
   return getTrainerByUserId(userId)
 }
 
-function ensurePersonalInviteLink(userId, request) {
-  const trainer = getTrainerByUserId(userId)
+async function ensurePersonalInviteLink(userId, request) {
+  const trainer = await getTrainerByUserId(userId)
   if (!trainer) return null
 
-  const existing = db
+  const existing = await db
     .prepare('SELECT invite_token AS token, invite_url AS url FROM trainers WHERE id = ?')
     .get(trainer.id)
 
@@ -129,7 +129,7 @@ function ensurePersonalInviteLink(userId, request) {
   const token = randomBytes(12).toString('hex')
   const url = `${getBaseUrl(request)}/?invite=${token}`
 
-  db.prepare('UPDATE trainers SET invite_token = ?, invite_url = ? WHERE id = ?').run(token, url, trainer.id)
+  await db.prepare('UPDATE trainers SET invite_token = ?, invite_url = ? WHERE id = ?').run(token, url, trainer.id)
 
   return {
     code: token.slice(0, 8).toUpperCase(),
@@ -139,20 +139,20 @@ function ensurePersonalInviteLink(userId, request) {
   }
 }
 
-function canAccessStudent(user, studentId, includeInactive = true) {
+async function canAccessStudent(user, studentId, includeInactive = true) {
   if (user.role === 'admin') return true
 
   if (user.role === 'aluno') {
-    const student = db.prepare('SELECT id FROM students WHERE id = ? AND user_id = ?').get(studentId, user.id)
+    const student = await db.prepare('SELECT id FROM students WHERE id = ? AND user_id = ?').get(studentId, user.id)
     return Boolean(student)
   }
 
   if (user.role === 'personal') {
-    const trainer = getTrainerByUserId(user.id)
+    const trainer = await getTrainerByUserId(user.id)
     if (!trainer) return false
 
     const activeClause = includeInactive ? '' : 'AND is_active = 1 AND ended_at IS NULL'
-    const link = db
+    const link = await db
       .prepare(
         `SELECT id FROM student_trainers WHERE student_id = ? AND trainer_id = ? ${activeClause}`,
       )
@@ -164,14 +164,14 @@ function canAccessStudent(user, studentId, includeInactive = true) {
   return false
 }
 
-function getStudentTrainer(user, studentId) {
+async function getStudentTrainer(user, studentId) {
   if (user.role === 'admin') return null
   if (user.role !== 'personal') return null
 
-  const trainer = getTrainerByUserId(user.id)
+  const trainer = await getTrainerByUserId(user.id)
   if (!trainer) return null
 
-  const link = db
+  const link = await db
     .prepare(
       `
       SELECT trainers.id
@@ -286,8 +286,8 @@ function profilePhotoData(fileName) {
   return `data:${mimeType};base64,${readFileSync(filePath).toString('base64')}`
 }
 
-function getUserProfile(userId) {
-  const profile = db.prepare(
+async function getUserProfile(userId) {
+  const profile = await db.prepare(
     `SELECT users.id, users.name, users.email, COALESCE(users.birth_date, '') AS birthDate,
       COALESCE(users.profile_photo_path, '') AS profilePhotoPath,
       user_roles.name AS role, COALESCE(trainers.registration_code, '') AS crefNumber,
@@ -326,7 +326,7 @@ function libraryVisibility(user, alias = '') {
   }
 }
 
-function getTemplateExercises(templateId) {
+async function getTemplateExercises(templateId) {
   return db
     .prepare(
       `
@@ -349,25 +349,25 @@ function getTemplateExercises(templateId) {
     .all(templateId)
 }
 
-function getVisibleTemplate(user, templateId, templateType) {
+async function getVisibleTemplate(user, templateId, templateType) {
   const visibility = libraryVisibility(user)
   return db
     .prepare(`SELECT * FROM workout_templates WHERE id = ? AND template_type = ? AND ${visibility.clause}`)
     .get(templateId, templateType, ...visibility.params)
 }
 
-function serializeDailyTemplate(template) {
+async function serializeDailyTemplate(template) {
   return {
     id: template.id,
     name: template.name,
     description: template.description ?? '',
     visibility: template.visibility,
-    exercises: getTemplateExercises(template.id),
+    exercises: await getTemplateExercises(template.id),
   }
 }
 
-function getTemplateDays(templateId) {
-  const rows = db
+async function getTemplateDays(templateId) {
+  const rows = await db
     .prepare(
       `
       SELECT weekly_template_days.day_of_week AS dayOfWeek,
@@ -383,15 +383,15 @@ function getTemplateDays(templateId) {
     )
     .all(templateId)
 
-  return rows.map((day) => ({
+  return Promise.all(rows.map(async (day) => ({
     ...day,
     workoutName: day.workoutName ?? 'Descanso',
-    exercises: day.dailyTemplateId ? getTemplateExercises(day.dailyTemplateId) : [],
-  }))
+    exercises: day.dailyTemplateId ? await getTemplateExercises(day.dailyTemplateId) : [],
+  })))
 }
 
-function getAppliedPlanDays(planId) {
-  const days = db
+async function getAppliedPlanDays(planId) {
+  const days = await db
     .prepare(
       `
       SELECT id, day_of_week AS dayOfWeek, name, COALESCE(instructions, '') AS instructions
@@ -418,11 +418,11 @@ function getAppliedPlanDays(planId) {
     `,
   )
 
-  return days.map((day) => ({ ...day, exercises: exercises.all(day.id) }))
+  return Promise.all(days.map(async (day) => ({ ...day, exercises: await exercises.all(day.id) })))
 }
 
-function requireRole(request, response, allowedRoles) {
-  const user = requireUser(request, response)
+async function requireRole(request, response, allowedRoles) {
+  const user = await requireUser(request, response)
 
   if (!user) return null
 
@@ -442,8 +442,8 @@ function getBaseUrl(request) {
   return `${protocol}://${host}`
 }
 
-function getInvitationByToken(token) {
-  const invitation = db
+async function getInvitationByToken(token) {
+  const invitation = await db
     .prepare(
       `
       SELECT
@@ -464,7 +464,7 @@ function getInvitationByToken(token) {
 
   if (invitation) return invitation
 
-  const trainerInvite = db
+  const trainerInvite = await db
     .prepare(
       `
       SELECT
@@ -500,13 +500,13 @@ function isInvitationUsable(invitation) {
   return new Date(invitation.expiresAt.replace(' ', 'T')) > new Date()
 }
 
-function createStudentInvite({ request, invitedByUserId, trainerId, email }) {
+async function createStudentInvite({ request, invitedByUserId, trainerId, email }) {
   const token = randomBytes(5).toString('hex').slice(0, 10).toUpperCase()
   const code = token
-  const role = db.prepare("SELECT id FROM user_roles WHERE name = 'aluno'").get()
+  const role = await db.prepare("SELECT id FROM user_roles WHERE name = 'aluno'").get()
   const expiresAt = toSqlDateTime(new Date(Date.now() + 1000 * 60 * 60 * 24 * 14))
 
-  db.prepare(
+  await db.prepare(
     `
     INSERT INTO invitations (invited_by_user_id, trainer_id, email, invite_code, role_id, token_hash, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -525,18 +525,18 @@ app.get('/api/health', (_request, response) => {
   response.json({ ok: true, service: 'APP-FIT API' })
 })
 
-app.get('/api/auth/me', (request, response) => {
-  const user = requireUser(request, response)
+app.get('/api/auth/me', async (request, response) => {
+  const user = await requireUser(request, response)
   if (!user) return
 
   response.json({ user: toPublicUser(user) })
 })
 
-app.get('/api/profile', (request, response) => {
-  const user = requireUser(request, response)
+app.get('/api/profile', async (request, response) => {
+  const user = await requireUser(request, response)
   if (!user) return
 
-  const profile = getUserProfile(user.id)
+  const profile = await getUserProfile(user.id)
   if (!profile) {
     response.status(404).json({ message: 'Perfil nao encontrado.' })
     return
@@ -544,8 +544,8 @@ app.get('/api/profile', (request, response) => {
   response.json({ profile })
 })
 
-app.patch('/api/profile', (request, response) => {
-  const user = requireUser(request, response)
+app.patch('/api/profile', async (request, response) => {
+  const user = await requireUser(request, response)
   if (!user) return
 
   const name = String(request.body?.name ?? '').trim()
@@ -562,13 +562,13 @@ app.patch('/api/profile', (request, response) => {
     response.status(400).json({ message: 'Data de nascimento invalida.' })
     return
   }
-  const duplicate = db.prepare('SELECT id FROM users WHERE email = ? AND id <> ?').get(email, user.id)
+  const duplicate = await db.prepare('SELECT id FROM users WHERE email = ? AND id <> ?').get(email, user.id)
   if (duplicate) {
     response.status(409).json({ message: 'Este e-mail ja pertence a outro usuario.' })
     return
   }
 
-  const current = db.prepare('SELECT profile_photo_path AS profilePhotoPath FROM users WHERE id = ?').get(user.id)
+  const current = await db.prepare('SELECT profile_photo_path AS profilePhotoPath FROM users WHERE id = ?').get(user.id)
   let photoFileName = current?.profilePhotoPath ?? ''
   if (profilePhoto === '') {
     photoFileName = ''
@@ -581,19 +581,19 @@ app.patch('/api/profile', (request, response) => {
     photoFileName = savedPhoto.fileName
   }
 
-  const transaction = db.transaction(() => {
-    db.prepare(
+  const transaction = db.transaction(async () => {
+    await db.prepare(
       `UPDATE users SET name = ?, email = ?, birth_date = ?, profile_photo_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
     ).run(name, email, birthDate || null, photoFileName || null, user.id)
     if (user.role === 'personal') {
-      ensureTrainerForUser(user.id)
-      db.prepare('UPDATE trainers SET registration_code = ? WHERE user_id = ?').run(crefNumber || null, user.id)
+      await ensureTrainerForUser(user.id)
+      await db.prepare('UPDATE trainers SET registration_code = ? WHERE user_id = ?').run(crefNumber || null, user.id)
     }
     if (user.role === 'aluno') {
-      db.prepare('UPDATE students SET name = ?, birth_date = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(name, birthDate || null, user.id)
+      await db.prepare('UPDATE students SET name = ?, birth_date = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(name, birthDate || null, user.id)
     }
   })
-  transaction()
+  await transaction()
 
   if (photoFileName !== current?.profilePhotoPath && current?.profilePhotoPath) {
     const oldName = basename(String(current.profilePhotoPath))
@@ -601,16 +601,16 @@ app.patch('/api/profile', (request, response) => {
     if (oldName.startsWith(`profile-${user.id}-`) && existsSync(oldPath)) unlinkSync(oldPath)
   }
 
-  response.json({ profile: getUserProfile(user.id) })
+  response.json({ profile: await getUserProfile(user.id) })
 })
 
-app.patch('/api/profile/password', (request, response) => {
-  const user = requireUser(request, response)
+app.patch('/api/profile/password', async (request, response) => {
+  const user = await requireUser(request, response)
   if (!user) return
 
   const currentPassword = String(request.body?.currentPassword ?? '')
   const newPassword = String(request.body?.newPassword ?? '')
-  const record = db.prepare('SELECT password_hash AS passwordHash FROM users WHERE id = ?').get(user.id)
+  const record = await db.prepare('SELECT password_hash AS passwordHash FROM users WHERE id = ?').get(user.id)
   if (!record || !bcrypt.compareSync(currentPassword, record.passwordHash ?? '')) {
     response.status(400).json({ message: 'A senha atual esta incorreta.' })
     return
@@ -624,15 +624,15 @@ app.patch('/api/profile/password', (request, response) => {
     return
   }
 
-  db.prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(bcrypt.hashSync(newPassword, 10), user.id)
+  await db.prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(bcrypt.hashSync(newPassword, 10), user.id)
   const currentTokenHash = hashToken(getBearerToken(request))
-  db.prepare(
+  await db.prepare(
     'UPDATE user_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND token_hash <> ? AND revoked_at IS NULL',
   ).run(user.id, currentTokenHash)
   response.json({ ok: true })
 })
 
-app.post('/api/auth/login', (request, response) => {
+app.post('/api/auth/login', async (request, response) => {
   const email = String(request.body?.email ?? '').trim().toLowerCase()
   const password = String(request.body?.password ?? '')
 
@@ -641,7 +641,7 @@ app.post('/api/auth/login', (request, response) => {
     return
   }
 
-  const user = db
+  const user = await db
     .prepare(
       `
       SELECT users.id, users.name, users.email, users.password_hash, user_roles.name AS role
@@ -657,12 +657,12 @@ app.post('/api/auth/login', (request, response) => {
     return
   }
 
-  response.json({ user: toPublicUser(user), token: createSession(user.id) })
+  response.json({ user: toPublicUser(user), token: await createSession(user.id) })
 })
 
-app.get('/api/invitations/student/:token', (request, response) => {
+app.get('/api/invitations/student/:token', async (request, response) => {
   const token = String(request.params.token ?? '').trim().toUpperCase()
-  const invitation = getInvitationByToken(token)
+  const invitation = await getInvitationByToken(token)
 
   if (!isInvitationUsable(invitation)) {
     response.status(404).json({ message: 'Convite invalido ou expirado.' })
@@ -679,11 +679,11 @@ app.get('/api/invitations/student/:token', (request, response) => {
   })
 })
 
-app.get('/api/personal/invite', (request, response) => {
-  const user = requireRole(request, response, ['personal'])
+app.get('/api/personal/invite', async (request, response) => {
+  const user = await requireRole(request, response, ['personal'])
   if (!user) return
 
-  const invite = ensurePersonalInviteLink(user.id, request)
+  const invite = await ensurePersonalInviteLink(user.id, request)
 
   if (!invite) {
     response.status(400).json({ message: 'Personal nao encontrado.' })
@@ -693,11 +693,11 @@ app.get('/api/personal/invite', (request, response) => {
   response.json({ invite })
 })
 
-app.post('/api/personal/invite', (request, response) => {
-  const user = requireRole(request, response, ['personal'])
+app.post('/api/personal/invite', async (request, response) => {
+  const user = await requireRole(request, response, ['personal'])
   if (!user) return
 
-  const invite = ensurePersonalInviteLink(user.id, request)
+  const invite = await ensurePersonalInviteLink(user.id, request)
 
   if (!invite) {
     response.status(400).json({ message: 'Personal nao encontrado.' })
@@ -707,12 +707,12 @@ app.post('/api/personal/invite', (request, response) => {
   response.status(201).json({ invite })
 })
 
-app.post('/api/auth/register', (request, response) => {
+app.post('/api/auth/register', async (request, response) => {
   const name = String(request.body?.name ?? '').trim()
   const email = String(request.body?.email ?? '').trim().toLowerCase()
   const password = String(request.body?.password ?? '')
   const invitationToken = String(request.body?.invitationToken ?? '').trim()
-  const invitation = invitationToken ? getInvitationByToken(invitationToken) : null
+  const invitation = invitationToken ? await getInvitationByToken(invitationToken) : null
   const requestedRole = String(request.body?.role ?? 'aluno').trim().toLowerCase()
   const role = invitation ? 'aluno' : requestedRole
 
@@ -731,22 +731,22 @@ app.post('/api/auth/register', (request, response) => {
     return
   }
 
-  const roleRecord = db.prepare('SELECT id, name FROM user_roles WHERE name = ?').get(role)
+  const roleRecord = await db.prepare('SELECT id, name FROM user_roles WHERE name = ?').get(role)
 
   if (!roleRecord) {
     response.status(400).json({ message: 'Tipo de usuario invalido.' })
     return
   }
 
-  const emailAlreadyExists = db.prepare('SELECT id FROM users WHERE email = ?').get(email)
+  const emailAlreadyExists = await db.prepare('SELECT id FROM users WHERE email = ?').get(email)
 
   if (emailAlreadyExists) {
     response.status(409).json({ message: 'Este e-mail ja esta cadastrado.' })
     return
   }
 
-  const transaction = db.transaction(() => {
-    const result = db
+  const transaction = db.transaction(async () => {
+    const result = await db
       .prepare(
         `
         INSERT INTO users (role_id, name, email, password_hash)
@@ -763,12 +763,12 @@ app.post('/api/auth/register', (request, response) => {
     }
 
     if (roleRecord.name === 'personal') {
-      ensureTrainerForUser(user.id)
-      ensurePersonalInviteLink(user.id, request)
+      await ensureTrainerForUser(user.id)
+      await ensurePersonalInviteLink(user.id, request)
     }
 
     if (invitation) {
-      const studentResult = db
+      const studentResult = await db
         .prepare(
           `
           INSERT INTO students (user_id, trainer_id, name, start_date, status)
@@ -777,7 +777,7 @@ app.post('/api/auth/register', (request, response) => {
         )
         .run(user.id, invitation.trainerId, name)
 
-      db.prepare(
+      await db.prepare(
         `
         INSERT INTO student_trainers (student_id, trainer_id, relationship_type, is_active, inactive_reason, ended_at)
         VALUES (?, ?, 'primary', 1, NULL, NULL)
@@ -789,7 +789,7 @@ app.post('/api/auth/register', (request, response) => {
         `,
       ).run(studentResult.lastInsertRowid, invitation.trainerId)
 
-      db.prepare(
+      await db.prepare(
         `
         UPDATE invitations
         SET status = 'accepted', accepted_student_id = ?, accepted_at = CURRENT_TIMESTAMP
@@ -801,19 +801,19 @@ app.post('/api/auth/register', (request, response) => {
     return user
   })
 
-  const user = transaction()
+  const user = await transaction()
 
-  response.status(201).json({ user, token: createSession(user.id) })
+  response.status(201).json({ user, token: await createSession(user.id) })
 })
 
-app.get('/api/trainers', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.get('/api/trainers', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const whereClause = user.role === 'personal' ? 'WHERE users.id = ?' : ''
   const params = user.role === 'personal' ? [user.id] : []
 
-  const trainers = db
+  const trainers = await db
     .prepare(
       `
       SELECT
@@ -832,22 +832,22 @@ app.get('/api/trainers', (request, response) => {
   response.json({ trainers })
 })
 
-app.post('/api/invitations/student', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.post('/api/invitations/student', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const email = String(request.body?.email ?? '').trim().toLowerCase()
   const requestedTrainerId = Number(request.body?.trainerId)
   const trainer = user.role === 'personal'
-    ? ensureTrainerForUser(user.id)
-    : db.prepare('SELECT id FROM trainers WHERE id = ?').get(requestedTrainerId)
+    ? await ensureTrainerForUser(user.id)
+    : await db.prepare('SELECT id FROM trainers WHERE id = ?').get(requestedTrainerId)
 
   if (!trainer) {
     response.status(400).json({ message: 'Selecione um personal valido para o convite.' })
     return
   }
 
-  const invitation = createStudentInvite({
+  const invitation = await createStudentInvite({
     request,
     invitedByUserId: user.id,
     trainerId: trainer.id,
@@ -857,11 +857,11 @@ app.post('/api/invitations/student', (request, response) => {
   response.status(201).json({ invitation })
 })
 
-app.get('/api/students/me', (request, response) => {
-  const user = requireRole(request, response, ['aluno'])
+app.get('/api/students/me', async (request, response) => {
+  const user = await requireRole(request, response, ['aluno'])
   if (!user) return
 
-  const student = db
+  const student = await db
     .prepare(
       `
       SELECT
@@ -891,8 +891,8 @@ app.get('/api/students/me', (request, response) => {
   response.json({ student: student ? { ...student, photo: profilePhotoData(student.photoPath || ''), photoPath: undefined } : null })
 })
 
-app.get('/api/students', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.get('/api/students', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const status = String(request.query.status ?? 'active')
@@ -902,8 +902,8 @@ app.get('/api/students', (request, response) => {
     return
   }
 
-  const queryBuilder = (selectClause, whereClause, params) => {
-    const rows = db.prepare(`
+  const queryBuilder = async (selectClause, whereClause, params) => {
+    const rows = await db.prepare(`
       ${selectClause}
       FROM students
       LEFT JOIN users ON users.id = students.user_id
@@ -928,7 +928,7 @@ app.get('/api/students', (request, response) => {
   if (user.role === 'admin') {
     const whereClause = status === 'all' ? '' : 'WHERE students.status = ?'
     const params = status === 'all' ? [] : [status]
-    const students = queryBuilder(
+    const students = await queryBuilder(
       `SELECT
         students.id,
         students.name,
@@ -948,7 +948,7 @@ app.get('/api/students', (request, response) => {
     return
   }
 
-  const trainer = getTrainerByUserId(user.id)
+  const trainer = await getTrainerByUserId(user.id)
 
   if (!trainer) {
     response.json({ students: [] })
@@ -957,7 +957,7 @@ app.get('/api/students', (request, response) => {
 
   const statusClause = status === 'all' ? '' : 'AND own_link.is_active = ?'
   const params = status === 'all' ? [trainer.id] : [trainer.id, status === 'active' ? 1 : 0]
-  const students = db
+  const students = (await db
     .prepare(
       `
       SELECT
@@ -986,14 +986,14 @@ app.get('/api/students', (request, response) => {
       ORDER BY students.name
       `,
     )
-    .all(...params)
+    .all(...params))
     .map((student) => ({ ...student, photo: profilePhotoData(student.photoPath || ''), trainers: student.trainers ?? '', photoPath: undefined }))
 
   response.json({ students })
 })
 
-app.post('/api/students', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.post('/api/students', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const name = String(request.body?.name ?? '').trim()
@@ -1008,8 +1008,8 @@ app.post('/api/students', (request, response) => {
     return
   }
 
-  const transaction = db.transaction(() => {
-    const result = db
+  const transaction = db.transaction(async () => {
+    const result = await db
       .prepare(
         `
         INSERT INTO students (name, goal, start_date, restrictions)
@@ -1025,27 +1025,27 @@ app.post('/api/students', (request, response) => {
     `)
 
     if (user.role === 'personal') {
-      const trainer = ensureTrainerForUser(user.id)
-      linkTrainer.run(studentId, trainer.id, 'primary')
-      db.prepare('UPDATE students SET trainer_id = ? WHERE id = ?').run(trainer.id, studentId)
+      const trainer = await ensureTrainerForUser(user.id)
+      await linkTrainer.run(studentId, trainer.id, 'primary')
+      await db.prepare('UPDATE students SET trainer_id = ? WHERE id = ?').run(trainer.id, studentId)
     }
 
     if (user.role === 'admin') {
       const validTrainerIds = trainerIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
 
       for (const trainerId of validTrainerIds) {
-        linkTrainer.run(studentId, trainerId, 'secondary')
+        await linkTrainer.run(studentId, trainerId, 'secondary')
       }
 
       if (validTrainerIds[0]) {
-        db.prepare('UPDATE students SET trainer_id = ? WHERE id = ?').run(validTrainerIds[0], studentId)
+        await db.prepare('UPDATE students SET trainer_id = ? WHERE id = ?').run(validTrainerIds[0], studentId)
       }
     }
 
     return studentId
   })
 
-  const studentId = transaction()
+  const studentId = await transaction()
 
   response.status(201).json({
     student: {
@@ -1062,8 +1062,8 @@ app.post('/api/students', (request, response) => {
   })
 })
 
-app.patch('/api/students/:studentId/status', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.patch('/api/students/:studentId/status', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const studentId = Number(request.params.studentId)
@@ -1076,12 +1076,12 @@ app.patch('/api/students/:studentId/status', (request, response) => {
   }
 
   if (user.role === 'admin') {
-    db.prepare('UPDATE students SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, studentId)
+    await db.prepare('UPDATE students SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, studentId)
     response.json({ ok: true })
     return
   }
 
-  const trainer = getTrainerByUserId(user.id)
+  const trainer = await getTrainerByUserId(user.id)
 
   if (!trainer) {
     response.status(403).json({ message: 'Personal nao encontrado.' })
@@ -1089,7 +1089,7 @@ app.patch('/api/students/:studentId/status', (request, response) => {
   }
 
   const result = status === 'active'
-    ? db.prepare(
+    ? await db.prepare(
       `
       UPDATE student_trainers
       SET is_active = 1,
@@ -1099,7 +1099,7 @@ app.patch('/api/students/:studentId/status', (request, response) => {
       WHERE student_id = ? AND trainer_id = ?
       `,
     ).run(studentId, trainer.id)
-    : db.prepare(
+    : await db.prepare(
       `
       UPDATE student_trainers
       SET is_active = 0,
@@ -1118,8 +1118,8 @@ app.patch('/api/students/:studentId/status', (request, response) => {
   response.json({ ok: true })
 })
 
-app.post('/api/students/:studentId/trainers', (request, response) => {
-  const user = requireRole(request, response, ['admin'])
+app.post('/api/students/:studentId/trainers', async (request, response) => {
+  const user = await requireRole(request, response, ['admin'])
   if (!user) return
 
   const studentId = Number(request.params.studentId)
@@ -1136,15 +1136,15 @@ app.post('/api/students/:studentId/trainers', (request, response) => {
     return
   }
 
-  const student = db.prepare('SELECT id FROM students WHERE id = ?').get(studentId)
-  const trainer = db.prepare('SELECT id FROM trainers WHERE id = ?').get(trainerId)
+  const student = await db.prepare('SELECT id FROM students WHERE id = ?').get(studentId)
+  const trainer = await db.prepare('SELECT id FROM trainers WHERE id = ?').get(trainerId)
 
   if (!student || !trainer) {
     response.status(404).json({ message: 'Aluno ou personal nao encontrado.' })
     return
   }
 
-  db.prepare(
+  await db.prepare(
     `
     INSERT INTO student_trainers (student_id, trainer_id, relationship_type, is_active, inactive_reason, ended_at)
     VALUES (?, ?, ?, 1, NULL, NULL)
@@ -1160,14 +1160,14 @@ app.post('/api/students/:studentId/trainers', (request, response) => {
   response.status(201).json({ ok: true })
 })
 
-app.delete('/api/students/:studentId/trainers/:trainerId', (request, response) => {
-  const user = requireRole(request, response, ['admin'])
+app.delete('/api/students/:studentId/trainers/:trainerId', async (request, response) => {
+  const user = await requireRole(request, response, ['admin'])
   if (!user) return
 
   const studentId = Number(request.params.studentId)
   const trainerId = Number(request.params.trainerId)
 
-  db.prepare(
+  await db.prepare(
     `
     UPDATE student_trainers
     SET is_active = 0,
@@ -1194,8 +1194,8 @@ app.get('/api/body-goals', (_request, response) => {
   })
 })
 
-app.get('/api/exercise-media/:fileName', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+app.get('/api/exercise-media/:fileName', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal', 'aluno'])
   if (!user) return
 
   const fileName = basename(String(request.params.fileName ?? ''))
@@ -1205,7 +1205,7 @@ app.get('/api/exercise-media/:fileName', (request, response) => {
   }
 
   const mediaPath = `/api/exercise-media/${fileName}`
-  const exercise = db.prepare(
+  const exercise = await db.prepare(
     'SELECT id, created_by_user_id AS createdByUserId, visibility FROM exercises WHERE video_or_gif_path = ? OR audio_path = ?',
   ).get(mediaPath, mediaPath)
   if (!exercise) {
@@ -1215,7 +1215,7 @@ app.get('/api/exercise-media/:fileName', (request, response) => {
 
   let allowed = exercise.visibility === 'platform' || exercise.createdByUserId === user.id
   if (!allowed && user.role === 'aluno') {
-    allowed = Boolean(db.prepare(
+    allowed = Boolean(await db.prepare(
       `SELECT 1 FROM daily_workout_exercises
        JOIN daily_workouts ON daily_workouts.id = daily_workout_exercises.daily_workout_id
        JOIN weekly_plans ON weekly_plans.id = daily_workouts.weekly_plan_id
@@ -1224,8 +1224,8 @@ app.get('/api/exercise-media/:fileName', (request, response) => {
     ).get(exercise.id, user.id))
   }
   if (!allowed && user.role === 'personal') {
-    const trainer = getTrainerByUserId(user.id)
-    allowed = Boolean(trainer && db.prepare(
+    const trainer = await getTrainerByUserId(user.id)
+    allowed = Boolean(trainer && await db.prepare(
       `SELECT 1 FROM daily_workout_exercises
        JOIN daily_workouts ON daily_workouts.id = daily_workout_exercises.daily_workout_id
        JOIN weekly_plans ON weekly_plans.id = daily_workouts.weekly_plan_id
@@ -1242,12 +1242,12 @@ app.get('/api/exercise-media/:fileName', (request, response) => {
   response.sendFile(filePath)
 })
 
-app.get('/api/assessment-photos/:photoId', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+app.get('/api/assessment-photos/:photoId', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal', 'aluno'])
   if (!user) return
 
   const photoId = Number(request.params.photoId)
-  const photo = db
+  const photo = await db
     .prepare(
       `
       SELECT assessment_photos.file_path AS fileName, physical_assessments.student_id AS studentId
@@ -1258,7 +1258,7 @@ app.get('/api/assessment-photos/:photoId', (request, response) => {
     )
     .get(photoId)
 
-  if (!photo || !canAccessStudent(user, photo.studentId)) {
+  if (!photo || !(await canAccessStudent(user, photo.studentId))) {
     response.status(404).json({ message: 'Foto nao encontrada.' })
     return
   }
@@ -1272,18 +1272,18 @@ app.get('/api/assessment-photos/:photoId', (request, response) => {
   response.sendFile(filePath)
 })
 
-app.get('/api/students/:studentId/assessments', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+app.get('/api/students/:studentId/assessments', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal', 'aluno'])
   if (!user) return
 
   const studentId = Number(request.params.studentId)
 
-  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId)) {
+  if (!Number.isInteger(studentId) || !(await canAccessStudent(user, studentId))) {
     response.status(403).json({ message: 'Sem acesso a este aluno.' })
     return
   }
 
-  const assessments = db
+  const assessments = await db
     .prepare(
       `
       SELECT
@@ -1330,31 +1330,31 @@ app.get('/api/students/:studentId/assessments', (request, response) => {
   }
 
   response.json({
-    assessments: assessments.map((assessment) => ({
+    assessments: await Promise.all(assessments.map(async (assessment) => ({
       ...assessment,
-      photos: photos.all(assessment.id).map(photoToPayload),
-    })),
+      photos: (await photos.all(assessment.id)).map(photoToPayload),
+    }))),
   })
 })
 
-app.post('/api/students/:studentId/assessments', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+app.post('/api/students/:studentId/assessments', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal', 'aluno'])
   if (!user) return
 
   const studentId = Number(request.params.studentId)
 
-  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId, false)) {
+  if (!Number.isInteger(studentId) || !(await canAccessStudent(user, studentId, false))) {
     response.status(403).json({ message: 'Sem acesso a este aluno ativo.' })
     return
   }
 
-  const trainer = getStudentTrainer(user, studentId)
+  const trainer = await getStudentTrainer(user, studentId)
   const body = request.body ?? {}
   const date = String(body.date ?? new Date().toISOString().slice(0, 10))
   const photos = Array.isArray(body.photos) ? body.photos : []
 
-  const transaction = db.transaction(() => {
-    const result = db
+  const transaction = db.transaction(async () => {
+    const result = await db
       .prepare(
         `
         INSERT INTO physical_assessments (
@@ -1402,22 +1402,22 @@ app.post('/api/students/:studentId/assessments', (request, response) => {
 
     for (const photo of photos) {
       const saved = saveAssessmentPhoto(studentId, photo)
-      if (saved) insertPhoto.run(result.lastInsertRowid, saved.angle, saved.fileName)
+      if (saved) await insertPhoto.run(result.lastInsertRowid, saved.angle, saved.fileName)
     }
 
     return result.lastInsertRowid
   })
 
-  response.status(201).json({ id: transaction() })
+  response.status(201).json({ id: await transaction() })
 })
 
-app.get('/api/workout-library', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.get('/api/workout-library', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const exerciseVisibility = libraryVisibility(user, 'exercises')
   const templateVisibility = libraryVisibility(user)
-  const exercises = db
+  const exercises = await db
     .prepare(
       `
       SELECT id, name, muscle_name AS muscle,
@@ -1436,24 +1436,24 @@ app.get('/api/workout-library', (request, response) => {
     )
     .all(...exerciseVisibility.params)
 
-  const templates = db
+  const templates = await db
     .prepare(
       `SELECT id, name, COALESCE(description, '') AS description, template_type AS templateType, visibility
        FROM workout_templates WHERE ${templateVisibility.clause} ORDER BY visibility DESC, name`,
     )
     .all(...templateVisibility.params)
-  const dailyTemplates = templates
+  const dailyTemplates = await Promise.all(templates
     .filter((template) => template.templateType === 'daily')
-    .map(serializeDailyTemplate)
-  const weeklyTemplates = templates
+    .map(serializeDailyTemplate))
+  const weeklyTemplates = await Promise.all(templates
     .filter((template) => template.templateType === 'weekly')
-    .map((template) => ({ ...template, days: getTemplateDays(template.id) }))
+    .map(async (template) => ({ ...template, days: await getTemplateDays(template.id) })))
 
   response.json({ exercises, dailyTemplates, weeklyTemplates })
 })
 
-app.post('/api/workout-library/exercises', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.post('/api/workout-library/exercises', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const name = String(request.body?.name ?? '').trim()
@@ -1480,7 +1480,7 @@ app.post('/api/workout-library/exercises', (request, response) => {
   }
 
   const visibility = user.role === 'admin' ? 'platform' : 'private'
-  const result = db.prepare(
+  const result = await db.prepare(
     `INSERT INTO exercises (
       created_by_user_id, visibility, name, muscle_name, video_or_gif_path, audio_path,
       default_sets, default_reps, default_load, rest_text, observation_text
@@ -1490,8 +1490,8 @@ app.post('/api/workout-library/exercises', (request, response) => {
   response.status(201).json({ exercise: { id: result.lastInsertRowid, name, muscle, sets: String(sets || ''), reps, load, rest, notes, media: savedMedia.value, audio: savedAudio.value, visibility } })
 })
 
-app.post('/api/workout-library/daily-templates', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.post('/api/workout-library/daily-templates', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const name = String(request.body?.name ?? '').trim()
@@ -1504,17 +1504,17 @@ app.post('/api/workout-library/daily-templates', (request, response) => {
 
   for (const item of exercises) {
     const visibility = libraryVisibility(user)
-    const exercise = db.prepare(`SELECT id FROM exercises WHERE id = ? AND ${visibility.clause}`).get(Number(item.exerciseId), ...visibility.params)
+    const exercise = await db.prepare(`SELECT id FROM exercises WHERE id = ? AND ${visibility.clause}`).get(Number(item.exerciseId), ...visibility.params)
     if (!exercise) {
       response.status(403).json({ message: 'Um dos exercicios nao esta disponivel para este usuario.' })
       return
     }
   }
 
-  const trainer = user.role === 'personal' ? ensureTrainerForUser(user.id) : null
+  const trainer = user.role === 'personal' ? await ensureTrainerForUser(user.id) : null
   const visibility = user.role === 'admin' ? 'platform' : 'private'
-  const transaction = db.transaction(() => {
-    const result = db.prepare(
+  const transaction = db.transaction(async () => {
+    const result = await db.prepare(
       `INSERT INTO workout_templates (created_by_user_id, visibility, trainer_id, name, description, template_type)
        VALUES (?, ?, ?, ?, ?, 'daily')`,
     ).run(user.id, visibility, trainer?.id ?? null, name, description)
@@ -1523,24 +1523,26 @@ app.post('/api/workout-library/daily-templates', (request, response) => {
        (workout_template_id, exercise_id, sort_order, sets, reps, load, rest_text, observation_text)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    exercises.forEach((item, index) => insertExercise.run(
-      result.lastInsertRowid,
-      Number(item.exerciseId),
-      index,
-      Number(item.sets) || null,
-      String(item.reps ?? ''),
-      String(item.load ?? 'moderado'),
-      String(item.rest ?? ''),
-      String(item.notes ?? ''),
-    ))
+    for (const [index, item] of exercises.entries()) {
+      await insertExercise.run(
+        result.lastInsertRowid,
+        Number(item.exerciseId),
+        index,
+        Number(item.sets) || null,
+        String(item.reps ?? ''),
+        String(item.load ?? 'moderado'),
+        String(item.rest ?? ''),
+        String(item.notes ?? ''),
+      )
+    }
     return result.lastInsertRowid
   })
 
-  response.status(201).json({ id: transaction() })
+  response.status(201).json({ id: await transaction() })
 })
 
-app.post('/api/workout-library/weekly-templates', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.post('/api/workout-library/weekly-templates', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const name = String(request.body?.name ?? '').trim()
@@ -1557,16 +1559,16 @@ app.post('/api/workout-library/weekly-templates', (request, response) => {
   })
 
   for (const day of normalizedDays.filter((item) => item.dailyTemplateId)) {
-    if (!getVisibleTemplate(user, day.dailyTemplateId, 'daily')) {
+    if (!(await getVisibleTemplate(user, day.dailyTemplateId, 'daily'))) {
       response.status(403).json({ message: `Treino indisponivel para ${day.label}.` })
       return
     }
   }
 
-  const trainer = user.role === 'personal' ? ensureTrainerForUser(user.id) : null
+  const trainer = user.role === 'personal' ? await ensureTrainerForUser(user.id) : null
   const visibility = user.role === 'admin' ? 'platform' : 'private'
-  const transaction = db.transaction(() => {
-    const result = db.prepare(
+  const transaction = db.transaction(async () => {
+    const result = await db.prepare(
       `INSERT INTO workout_templates (created_by_user_id, visibility, trainer_id, name, description, template_type)
        VALUES (?, ?, ?, ?, ?, 'weekly')`,
     ).run(user.id, visibility, trainer?.id ?? null, name, description)
@@ -1574,25 +1576,27 @@ app.post('/api/workout-library/weekly-templates', (request, response) => {
       `INSERT INTO weekly_template_days (weekly_template_id, day_of_week, daily_template_id, day_name, sort_order)
        VALUES (?, ?, ?, ?, ?)`,
     )
-    normalizedDays.forEach((day, index) => insertDay.run(result.lastInsertRowid, day.key, day.dailyTemplateId, day.label, index))
+    for (const [index, day] of normalizedDays.entries()) {
+      await insertDay.run(result.lastInsertRowid, day.key, day.dailyTemplateId, day.label, index)
+    }
     return result.lastInsertRowid
   })
 
-  response.status(201).json({ id: transaction() })
+  response.status(201).json({ id: await transaction() })
 })
 
-app.get('/api/students/:studentId/plans', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+app.get('/api/students/:studentId/plans', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal', 'aluno'])
   if (!user) return
 
   const studentId = Number(request.params.studentId)
 
-  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId)) {
+  if (!Number.isInteger(studentId) || !(await canAccessStudent(user, studentId))) {
     response.status(403).json({ message: 'Sem acesso a este aluno.' })
     return
   }
 
-  const workouts = db
+  const workouts = await db
     .prepare(
       `
       SELECT id, name, week_start_date AS weekStartDate, COALESCE(notes, '') AS notes,
@@ -1604,7 +1608,7 @@ app.get('/api/students/:studentId/plans', (request, response) => {
     )
     .all(studentId)
 
-  const diets = db
+  const diets = await db
     .prepare(
       `
       SELECT id, name, COALESCE(plan_date, week_start_date, '') AS planDate, COALESCE(notes, '') AS notes, created_at AS createdAt
@@ -1616,25 +1620,25 @@ app.get('/api/students/:studentId/plans', (request, response) => {
     .all(studentId)
 
   response.json({
-    workouts: workouts.map((plan) => ({ ...plan, days: getAppliedPlanDays(plan.id) })),
+    workouts: await Promise.all(workouts.map(async (plan) => ({ ...plan, days: await getAppliedPlanDays(plan.id) }))),
     diets,
   })
 })
 
-app.post('/api/students/:studentId/workout-plans', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.post('/api/students/:studentId/workout-plans', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const studentId = Number(request.params.studentId)
 
-  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId, false)) {
+  if (!Number.isInteger(studentId) || !(await canAccessStudent(user, studentId, false))) {
     response.status(403).json({ message: 'Sem acesso a este aluno ativo.' })
     return
   }
 
-  const trainer = getStudentTrainer(user, studentId)
+  const trainer = await getStudentTrainer(user, studentId)
   const templateId = Number(request.body?.templateId) || null
-  const template = templateId ? getVisibleTemplate(user, templateId, 'weekly') : null
+  const template = templateId ? await getVisibleTemplate(user, templateId, 'weekly') : null
   const name = String(request.body?.name ?? template?.name ?? '').trim()
   const weekStartDate = String(request.body?.weekStartDate ?? new Date().toISOString().slice(0, 10)).trim()
   const notes = String(request.body?.notes ?? template?.description ?? '').trim()
@@ -1649,10 +1653,10 @@ app.post('/api/students/:studentId/workout-plans', (request, response) => {
     return
   }
 
-  const days = template ? getTemplateDays(template.id) : weekDays.map((day) => ({ ...day, workoutName: 'Descanso', instructions: '', dailyTemplateId: null, exercises: [] }))
-  const transaction = db.transaction(() => {
-    db.prepare("UPDATE weekly_plans SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE student_id = ? AND status = 'active'").run(studentId)
-    const result = db.prepare(
+  const days = template ? await getTemplateDays(template.id) : weekDays.map((day) => ({ ...day, workoutName: 'Descanso', instructions: '', dailyTemplateId: null, exercises: [] }))
+  const transaction = db.transaction(async () => {
+    await db.prepare("UPDATE weekly_plans SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE student_id = ? AND status = 'active'").run(studentId)
+    const result = await db.prepare(
       `INSERT INTO weekly_plans (student_id, trainer_id, workout_template_id, name, week_start_date, notes, status)
        VALUES (?, ?, ?, ?, ?, ?, 'active')`,
     ).run(studentId, trainer?.id ?? null, templateId, name, weekStartDate, notes)
@@ -1666,53 +1670,55 @@ app.post('/api/students/:studentId/workout-plans', (request, response) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
 
-    days.forEach((day) => {
-      const daily = insertDay.run(result.lastInsertRowid, day.dailyTemplateId, day.dayOfWeek ?? day.key, day.workoutName, day.instructions)
-      day.exercises.forEach((exercise, index) => insertExercise.run(
-        daily.lastInsertRowid,
-        exercise.id,
-        index,
-        Number(exercise.sets) || null,
-        String(exercise.reps ?? ''),
-        String(exercise.load ?? 'moderado'),
-        String(exercise.rest ?? ''),
-        String(exercise.notes ?? ''),
-      ))
-    })
+    for (const day of days) {
+      const daily = await insertDay.run(result.lastInsertRowid, day.dailyTemplateId, day.dayOfWeek ?? day.key, day.workoutName, day.instructions)
+      for (const [index, exercise] of day.exercises.entries()) {
+        await insertExercise.run(
+          daily.lastInsertRowid,
+          exercise.id,
+          index,
+          Number(exercise.sets) || null,
+          String(exercise.reps ?? ''),
+          String(exercise.load ?? 'moderado'),
+          String(exercise.rest ?? ''),
+          String(exercise.notes ?? ''),
+        )
+      }
+    }
     return result.lastInsertRowid
   })
 
-  const planId = transaction()
-  response.status(201).json({ plan: { id: planId, name, weekStartDate, notes, status: 'active', days: getAppliedPlanDays(planId) } })
+  const planId = await transaction()
+  response.status(201).json({ plan: { id: planId, name, weekStartDate, notes, status: 'active', days: await getAppliedPlanDays(planId) } })
 })
 
-app.patch('/api/workout-plans/:planId/complete', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal', 'aluno'])
+app.patch('/api/workout-plans/:planId/complete', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal', 'aluno'])
   if (!user) return
 
   const planId = Number(request.params.planId)
-  const plan = db.prepare('SELECT id, student_id AS studentId FROM weekly_plans WHERE id = ?').get(planId)
-  if (!plan || !canAccessStudent(user, plan.studentId, false)) {
+  const plan = await db.prepare('SELECT id, student_id AS studentId FROM weekly_plans WHERE id = ?').get(planId)
+  if (!plan || !(await canAccessStudent(user, plan.studentId, false))) {
     response.status(403).json({ message: 'Sem acesso a este plano.' })
     return
   }
 
-  db.prepare("UPDATE weekly_plans SET status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(planId)
+  await db.prepare("UPDATE weekly_plans SET status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(planId)
   response.json({ ok: true })
 })
 
-app.post('/api/students/:studentId/diet-plans', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.post('/api/students/:studentId/diet-plans', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const studentId = Number(request.params.studentId)
 
-  if (!Number.isInteger(studentId) || !canAccessStudent(user, studentId, false)) {
+  if (!Number.isInteger(studentId) || !(await canAccessStudent(user, studentId, false))) {
     response.status(403).json({ message: 'Sem acesso a este aluno ativo.' })
     return
   }
 
-  const trainer = getStudentTrainer(user, studentId)
+  const trainer = await getStudentTrainer(user, studentId)
   const name = String(request.body?.name ?? '').trim()
   const planDate = String(request.body?.planDate ?? new Date().toISOString().slice(0, 10)).trim()
   const notes = String(request.body?.notes ?? '').trim()
@@ -1722,7 +1728,7 @@ app.post('/api/students/:studentId/diet-plans', (request, response) => {
     return
   }
 
-  const result = db
+  const result = await db
     .prepare(
       `
       INSERT INTO diet_plans (student_id, trainer_id, name, plan_date, notes)
@@ -1734,15 +1740,15 @@ app.post('/api/students/:studentId/diet-plans', (request, response) => {
   response.status(201).json({ plan: { id: result.lastInsertRowid, name, planDate, notes } })
 })
 
-app.get('/api/exercises', (request, response) => {
-  const user = requireUser(request, response)
+app.get('/api/exercises', async (request, response) => {
+  const user = await requireUser(request, response)
   if (!user) return
 
   const visibility = user.role === 'aluno'
     ? { clause: "exercises.visibility = 'platform'", params: [] }
     : libraryVisibility(user, 'exercises')
 
-  const exercises = db
+  const exercises = await db
     .prepare(
       `
       SELECT
@@ -1767,8 +1773,8 @@ app.get('/api/exercises', (request, response) => {
   response.json({ exercises })
 })
 
-app.post('/api/exercises', (request, response) => {
-  const user = requireRole(request, response, ['admin', 'personal'])
+app.post('/api/exercises', async (request, response) => {
+  const user = await requireRole(request, response, ['admin', 'personal'])
   if (!user) return
 
   const name = String(request.body?.name ?? '').trim()
@@ -1800,7 +1806,7 @@ app.post('/api/exercises', (request, response) => {
   }
 
   const visibility = user.role === 'admin' ? 'platform' : 'private'
-  const result = db
+  const result = await db
     .prepare(
       `
       INSERT INTO exercises (
@@ -1838,6 +1844,13 @@ app.post('/api/exercises', (request, response) => {
   })
 })
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`APP-FIT API rodando em http://0.0.0.0:${port}`)
-})
+databaseReady
+  .then(() => {
+    app.listen(port, '0.0.0.0', () => {
+      console.log(`APP-FIT API rodando em http://0.0.0.0:${port}`)
+    })
+  })
+  .catch((error) => {
+    console.error('Falha ao inicializar o banco PostgreSQL.', error)
+    process.exitCode = 1
+  })
