@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { databaseReady, db, toPublicUser } from './db.js'
 
 const app = express()
-const port = Number(process.env.PORT ?? 8080)
+const port = Number(process.env.PORT ?? 3000)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const rootDir = join(__dirname, '..')
 const uploadDir = process.env.UPLOAD_DIR ?? join(rootDir, 'data', 'uploads')

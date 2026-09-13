@@ -1,75 +1,73 @@
 # APP-FIT
 
-Aplicativo de gestão para assessoria fitness com login por perfil, alunos, treinos, dietas, avaliações e biblioteca de exercícios.
+Aplicativo web para gestao de assessoria fitness. A aplicacao separa perfis de admin, personal e aluno, com cadastro de alunos, biblioteca de exercicios, modelos de treino, dietas, avaliacoes fisicas, fotos, convites e perfil do usuario.
 
 ## Requisitos
 
-- Node.js 18+
+- Node.js 20+ recomendado
 - npm
+- PostgreSQL acessivel pela aplicacao
 
-## Instalação
+## Instalacao
 
 ```bash
 npm install
 ```
 
+## Configuracao local
+
+Crie um arquivo `.env` na raiz usando `.env.example` como base:
+
+```bash
+PORT=3000
+DATABASE_URL=postgresql://usuario:senha@localhost:5432/appfit
+DATABASE_SSL=false
+UPLOAD_DIR=./data/uploads
+```
+
+O servidor carrega `.env` automaticamente. O schema em `database/schema.sql` e aplicado ao iniciar a API.
+
 ## Rodar o projeto
 
-Para iniciar frontend e API juntos em um único comando:
+Para iniciar frontend e API juntos:
 
 ```bash
 npm run dev:full
 ```
 
-Isso executa:
-- Frontend em http://localhost:5174
-- API em http://localhost:3000
+Servicos locais:
 
-Também é possível iniciar separadamente:
+- Frontend: http://localhost:5173
+- API: http://localhost:3000
+- Healthcheck: http://localhost:3000/api/health
+
+Tambem e possivel iniciar separadamente:
 
 ```bash
 npm run dev
 npm run dev:api
 ```
 
-## Usuários de demonstração
+## Primeiro acesso
 
-- personal@appfit.local / 123456
-- admin@appfit.local / 123456
-- aluno@appfit.local / 123456
+Use a aba de cadastro para criar o primeiro usuario. O cadastro permite escolher entre `admin`, `personal` e `aluno`; alunos tambem podem entrar por convite gerado por um personal.
 
-## Build de produção
+## Build de producao
 
 ```bash
 npm run build
+npm start
 ```
 
-## Observações
+## Deploy
 
-- O banco SQLite é criado automaticamente em data/app-fit.db.
-- O servidor salva uploads em data/uploads.
-- A API expõe healthcheck em /api/health.
-
-## Configuração recomendada para DigitalOcean
-
-Este projeto usa SQLite, então a configuração estável na DigitalOcean é um volume persistente, não uma conexão remota de banco. O erro de runtime “Cannot open database because the directory does not exist” acontece quando o diretório /var/lib/app-fit/data não está montado no container.
-
-Defina estas variáveis de ambiente no App Platform:
+Em producao, defina as variaveis de ambiente do provedor:
 
 ```bash
 PORT=8080
-DATABASE_PATH=/var/lib/app-fit/data/app-fit.db
-UPLOAD_DIR=/var/lib/app-fit/data/uploads
+DATABASE_URL=postgresql://usuario:senha@host:25060/appfit
+DATABASE_SSL=true
+UPLOAD_DIR=/var/lib/app-fit/uploads
 ```
 
-No painel do DigitalOcean App Platform:
-
-1. Vá em Settings > App-Level Environment Variables
-2. Adicione as três variáveis acima
-3. Vá em Storage / Volumes e crie um volume persistente
-4. Monte o volume em /var/lib/app-fit/data
-5. Mantenha HTTP Port em 8080
-
-Com isso, o SQLite fica persistente entre deploys e reinicializações. O projeto já cria os diretórios automaticamente se as variáveis existirem.
-
-> Se você quiser migrar para PostgreSQL/MySQL do DigitalOcean Managed Database, será necessário refatorar a camada de acesso do banco e ajustar schema/queries, porque o código atual está construído em better-sqlite3.
+Se o provedor usar outro valor de `PORT`, mantenha o valor fornecido por ele. Para uploads persistentes, aponte `UPLOAD_DIR` para um volume persistente.

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import {
   KeyRound,
   LogIn,
@@ -19,8 +19,8 @@ export function AuthScreen({
   onRegister: (user: RegisterUserInput) => Promise<string>
 }) {
   const [mode, setMode] = useState<AuthMode>('login')
-  const [loginEmail, setLoginEmail] = useState('personal@appfit.local')
-  const [loginPassword, setLoginPassword] = useState('123456')
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
   const [registerForm, setRegisterForm] = useState<RegisterUserInput>({
     name: '',
     email: '',
@@ -29,17 +29,8 @@ export function AuthScreen({
   })
   const [message, setMessage] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
-
-  useEffect(() => {
-    if (!invitationToken) return
-
-    setMode('register')
-    setRegisterForm((current) => ({
-      ...current,
-      email: invitation?.email || current.email,
-      role: 'aluno',
-    }))
-  }, [invitation, invitationToken])
+  const activeMode = invitationToken ? 'register' : mode
+  const registerEmail = invitation?.email || registerForm.email
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -52,13 +43,19 @@ export function AuthScreen({
   async function submitRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    if (!registerForm.name.trim() || !registerForm.email.trim() || registerForm.password.length < 6) {
+    const payload = {
+      ...registerForm,
+      email: registerEmail,
+      role: invitationToken ? 'aluno' as const : registerForm.role,
+    }
+
+    if (!payload.name.trim() || !payload.email.trim() || payload.password.length < 6) {
       setMessage('Preencha nome, e-mail e senha com pelo menos 6 caracteres.')
       return
     }
 
     setIsSubmitting(true)
-    const errorMessage = await onRegister(registerForm)
+    const errorMessage = await onRegister(payload)
     setMessage(errorMessage)
     setIsSubmitting(false)
   }
@@ -77,31 +74,31 @@ export function AuthScreen({
           <p className="eyebrow">Acesso local</p>
           <h1>{invitation ? `Cadastro vinculado a ${invitation.trainerName}.` : 'Entre no painel ou cadastre um novo usuario.'}</h1>
           <p>
-            A tela ja separa perfis de admin, personal e aluno. Login e cadastro agora usam a
-            API local com SQLite.
+            A tela separa perfis de admin, personal e aluno. Login e cadastro usam a API local
+            conectada ao PostgreSQL configurado no projeto.
           </p>
         </div>
-        <div className="demo-users" aria-label="Usuarios de demonstracao">
-          <strong>Usuarios de teste</strong>
-          <span>personal@appfit.local / 123456</span>
-          <span>admin@appfit.local / 123456</span>
-          <span>aluno@appfit.local / 123456</span>
+        <div className="demo-users" aria-label="Primeiro acesso">
+          <strong>Primeiro acesso</strong>
+          <span>Use a aba Cadastro para criar o primeiro usuario.</span>
+          <span>Personais podem gerar convites para novos alunos.</span>
+          <span>Admins podem vincular alunos e personais.</span>
         </div>
       </section>
 
       <section className="auth-panel" aria-label="Login e cadastro">
         <div className="auth-tabs">
-          <button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')} type="button">
+          <button className={activeMode === 'login' ? 'active' : ''} disabled={Boolean(invitationToken)} onClick={() => setMode('login')} type="button">
             <LogIn size={17} />
             Login
           </button>
-          <button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')} type="button">
+          <button className={activeMode === 'register' ? 'active' : ''} onClick={() => setMode('register')} type="button">
             <UserPlus size={17} />
             Cadastro
           </button>
         </div>
 
-        {mode === 'login' ? (
+        {activeMode === 'login' ? (
           <form className="auth-form" onSubmit={submitLogin}>
             <label>
               <span>E-mail</span>
@@ -150,10 +147,11 @@ export function AuthScreen({
               <span>E-mail</span>
               <input
                 autoComplete="email"
+                disabled={Boolean(invitation?.email)}
                 onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })}
                 placeholder="seu@email.com"
                 type="email"
-                value={registerForm.email}
+                value={registerEmail}
               />
             </label>
             <label>
@@ -171,7 +169,7 @@ export function AuthScreen({
               <select
                 disabled={Boolean(invitationToken)}
                 onChange={(event) => setRegisterForm({ ...registerForm, role: event.target.value as Area })}
-                value={registerForm.role}
+                value={invitationToken ? 'aluno' : registerForm.role}
               >
                 <option value="aluno">Aluno</option>
                 <option value="personal">Personal</option>

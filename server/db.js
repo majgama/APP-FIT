@@ -1,8 +1,33 @@
 import { Pool } from 'pg'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+function loadEnvFile() {
+  const envPath = join(rootDir, '.env')
+  if (!existsSync(envPath)) return
+
+  const env = readFileSync(envPath, 'utf8')
+  for (const line of env.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    const separator = trimmed.indexOf('=')
+    if (separator <= 0) continue
+
+    const key = trimmed.slice(0, separator).trim()
+    const rawValue = trimmed.slice(separator + 1).trim()
+    const value = rawValue.replace(/^['"]|['"]$/g, '')
+
+    if (!process.env[key]) process.env[key] = value
+  }
+}
+
+loadEnvFile()
 
 const connectionString = process.env.DATABASE_URL
 
@@ -18,8 +43,6 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000,
 })
 const transactionStorage = new AsyncLocalStorage()
-
-const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 function postgresSchema(sql) {
   return sql
@@ -55,7 +78,7 @@ function normalizeSql(sql, params) {
     .replace(/date\('now'\)/gi, 'CURRENT_DATE')
     .replace(/datetime\(['"]now['"]\)/gi, 'NOW()')
     .replace(/datetime\(([^)]+)\)/gi, '$1')
-    .replace(/GROUP_CONCAT\(DISTINCT\s+([^\)]+)\)/gi, "STRING_AGG(DISTINCT $1, ',')")
+    .replace(/GROUP_CONCAT\(DISTINCT\s+([^)]+)\)/gi, "STRING_AGG(DISTINCT $1, ',')")
 
   if (/^\s*INSERT\s/i.test(normalized) && !/\bRETURNING\b/i.test(normalized)) {
     normalized = `${normalized.trimEnd()} RETURNING id`
